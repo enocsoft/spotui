@@ -1,0 +1,4 @@
+# spikes and local build output
+/spike/
+/bin/
+/dist/
