@@ -37,6 +37,7 @@ type Playlist struct {
 // Sink is one local audio output (PipeWire, PulseAudio, ALSA, JACK, HDMI...).
 type Sink struct {
 	Name    string // "Speakers · PipeWire", "HDMI / DisplayPort", "JACK"
+	ID      string // sink identifier the player understands (PulseAudio sink name); empty for mock rows
 	Active  bool
 	Blocked string // non-empty when the sink cannot take audio right now
 }
@@ -61,6 +62,9 @@ type Session struct {
 	Output   string // active sink, e.g. "Speakers · PipeWire"
 	Bitrate  string
 	TrackID  string
+	Title    string // now-playing text from the real player; empty for the mock (row lookup by TrackID)
+	Artist   string
+	Album    string
 	Elapsed  time.Duration
 	Total    time.Duration
 	Volume   int // 0..100
@@ -89,4 +93,34 @@ type Player interface {
 	Next() error
 	Prev() error
 	Enqueue(track Track) error
+	VolumeUp() error
+	VolumeDown() error
+}
+
+// EventType is the kind of player notification carried by an Event.
+type EventType uint8
+
+const (
+	// EventState means the session snapshot changed; re-read Session().
+	EventState EventType = iota
+	// EventLogin carries the interactive auth URL in LoginURL (spec S9).
+	EventLogin
+	// EventReady means the embedded player session is established.
+	EventReady
+	// EventFailed carries the bootstrap failure in Err.
+	EventFailed
+)
+
+// Event is one player notification pushed to the UI loop. The UI mirrors
+// state by re-reading Session(); it never advances progress optimistically.
+type Event struct {
+	Type     EventType
+	LoginURL string
+	Err      error
+}
+
+// PlayerEvents is implemented by players that push state updates. The TUI
+// relays the channel into bubbletea messages.
+type PlayerEvents interface {
+	Events() <-chan Event
 }

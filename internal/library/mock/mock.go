@@ -154,6 +154,25 @@ func (m *Mock) Enqueue(track library.Track) error {
 	return nil
 }
 
+func (m *Mock) VolumeUp() error { return m.volumeDelta(10) }
+
+func (m *Mock) VolumeDown() error { return m.volumeDelta(-10) }
+
+func (m *Mock) volumeDelta(d int) error {
+	if m.session.State == library.StateNoOutput {
+		return errors.New("no audio output · d to pick")
+	}
+	v := m.session.Volume + d
+	if v < 0 {
+		v = 0
+	}
+	if v > 100 {
+		v = 100
+	}
+	m.session.Volume = v
+	return nil
+}
+
 func (m *Mock) indexOf(id string) int {
 	for i := range m.playlist.Tracks {
 		if m.playlist.Tracks[i].ID == id {
