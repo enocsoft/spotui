@@ -1,0 +1,246 @@
+package app
+
+import (
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotify-tui/internal/ui/theme"
+)
+
+type rowKind int
+
+const (
+	rowHeader rowKind = iota
+	rowPlaylistItem
+	rowTrack
+)
+
+// row is one visible list row. The list is one full-screen component (S4);
+// its rows are either section headers, a collection item or a track.
+type row struct {
+	kind    rowKind
+	text    string
+	count   int
+	num     int // 1-based position in its list (track rows)
+	track   library.Track
+	playing bool
+}
+
+// currentTrack resolves the track reported by the Connect session.
+func (m Model) currentTrack() (library.Track, bool) {
+	s := m.data.Session()
+	for _, t := range m.data.Playlist().Tracks {
+		if t.ID == s.TrackID {
+			return t, true
+		}
+	}
+	return library.Track{}, false
+}
+
+// tracksForView is the track list of the focused view (playlist, search or
+// queue), narrowed by the active filter.
+func (m Model) tracksForView() []library.Track {
+	var tracks []library.Track
+	switch m.section {
+	case SectionSearch:
+		tracks = m.data.Playlist().Tracks // mock: search covers the library list
+	case SectionQueue:
+		tracks = m.data.Queue()
+	default:
+		if !m.drillDown {
+			return nil
+		}
+		tracks = m.data.Playlist().Tracks
+	}
+	if m.filter != "" {
+		q := strings.ToLower(m.filter)
+		narrowed := make([]library.Track, 0, len(tracks))
+		for _, t := range tracks {
+			hay := strings.ToLower(t.Title + " " + t.Artist + " " + t.Album)
+			if strings.Contains(hay, q) {
+				narrowed = append(narrowed, t)
+			}
+		}
+		tracks = narrowed
+	}
+	return tracks
+}
+
+func (m Model) playlistPlaying(id string) bool { return m.data.Session().TrackID == id }
+
+// visibleRows is the row list under the cursor. At the library root it is
+// section headers plus collection items; anywhere else it is the track list
+// of the focused view (playlist, search or queue).
+func (m Model) visibleRows() []row {
+	if m.section == SectionLibrary && !m.drillDown {
+		var rows []row
+		for _, s := range m.data.Library() {
+			expanded := s.Name == "PLAYLISTS" && m.expanded[s.Name]
+			glyph := theme.GlyphCollapsed
+			if expanded {
+				glyph = theme.GlyphExpanded
+			}
+			rows = append(rows, row{kind: rowHeader, text: glyph + " " + s.Name, count: s.Count})
+			if expanded && s.Name == "PLAYLISTS" {
+				pl := m.data.Playlist()
+				rows = append(rows, row{kind: rowPlaylistItem, text: pl.Name, count: len(pl.Tracks)})
+			}
+		}
+		return rows
+	}
+	tracks := m.tracksForView()
+	rows := make([]row, len(tracks))
+	for i, t := range tracks {
+		rows[i] = row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)}
+	}
+	return rows
+}
+
+// trackUnderCursor returns the track on the row under the cursor, if any.
+func (m Model) trackUnderCursor() (library.Track, bool) {
+	rows := m.visibleRows()
+	if m.cursor < 0 || m.cursor >= len(rows) {
+		return library.Track{}, false
+	}
+	r := rows[m.cursor]
+	return r.track, r.kind == rowTrack
+}
+
+func (m *Model) onEnter() tea.Cmd {
+	rows := m.visibleRows()
+	if m.section == SectionLibrary && !m.drillDown {
+		if m.cursor < len(rows) {
+			r := rows[m.cursor]
+			if r.kind == rowPlaylistItem {
+				m.drillDown = true
+				m.cursor = 0
+				m.listOffset = 0
+				return nil
+			}
+			if r.kind == rowHeader {
+				return m.onToggle()
+			}
+		}
+		return m.setToast("enter · nothing to open here")
+	}
+	if track, ok := m.trackUnderCursor(); ok {
+		if err := m.player.Play(track); err != nil {
+			return m.setToast("✗ " + err.Error())
+		}
+		return m.setToast("▶ " + track.Title)
+	}
+	return m.setToast("enter · nothing to play on this row")
+}
+
+func (m *Model) onEnqueue() tea.Cmd {
+	if track, ok := m.trackUnderCursor(); ok {
+		if err := m.player.Enqueue(track); err != nil {
+			return m.setToast("✗ " + err.Error())
+		}
+		return m.setToast("queued · " + track.Title)
+	}
+	return m.setToast("a · open a track list first")
+}
+
+func (m *Model) onPause() tea.Cmd {
+	if err := m.player.TogglePause(); err != nil {
+		return m.setToast("✗ " + err.Error())
+	}
+	if m.data.Session().State == library.StatePaused {
+		return m.setToast("paused")
+	}
+	return m.setToast("playing")
+}
+
+func (m *Model) onNext() tea.Cmd {
+	if err := m.player.Next(); err != nil {
+		return m.setToast("✗ " + err.Error())
+	}
+	if t, ok := m.currentTrack(); ok {
+		return m.setToast("▶ " + t.Title)
+	}
+	return nil
+}
+
+func (m *Model) onPrev() tea.Cmd {
+	if err := m.player.Prev(); err != nil {
+		return m.setToast("✗ " + err.Error())
+	}
+	if t, ok := m.currentTrack(); ok {
+		return m.setToast("▶ " + t.Title)
+	}
+	return nil
+}
+
+// onToggle handles `l`: expand/collapse on library headers, saved toggle on
+// track rows (spec S6, in place, no dialog).
+func (m *Model) onToggle() tea.Cmd {
+	rows := m.visibleRows()
+	if m.cursor >= len(rows) {
+		return m.setToast("l · nothing to toggle")
+	}
+	r := rows[m.cursor]
+	if r.kind == rowHeader {
+		name := strings.TrimPrefix(r.text, theme.GlyphExpanded+" ")
+		name = strings.TrimPrefix(name, theme.GlyphCollapsed+" ")
+		if name == "PLAYLISTS" {
+			m.expanded["PLAYLISTS"] = !m.expanded["PLAYLISTS"]
+			return nil
+		}
+		return m.setToast("l · " + name + " is empty in slice 1")
+	}
+	if r.kind == rowTrack {
+		saved := !r.track.Saved
+		if err := m.data.SetSaved(r.track.ID, saved); err != nil {
+			return m.setToast("✗ " + err.Error())
+		}
+		if saved {
+			return m.setToast("saved · " + r.track.Title)
+		}
+		return m.setToast("unsaved · " + r.track.Title)
+	}
+	return m.setToast("l · nothing to save here")
+}
+
+func (m *Model) onEsc() tea.Cmd {
+	if m.drillDown && m.section == SectionLibrary {
+		m.drillDown = false
+		m.cursor = 0
+		m.listOffset = 0
+		return nil
+	}
+	return m.setToast("already at top")
+}
+
+// onPickSinkCmd wraps onPickSink for the update loop.
+func (m Model) onPickSinkCmd() (tea.Model, tea.Cmd) {
+	cmd := (&m).onPickSink()
+	return m, cmd
+}
+
+// onPickSink selects the audio output under the picker cursor (local-player
+// pivot: `d` picks a local sink, never a remote device).
+func (m *Model) onPickSink() tea.Cmd {
+	sinks := m.data.Sinks()
+	if m.pickerCursor < 0 || m.pickerCursor >= len(sinks) {
+		m.pickerOpen = false
+		return m.setToast("no audio output selected")
+	}
+	sink := sinks[m.pickerCursor]
+	if err := m.data.SetSink(sink.Name); err != nil {
+		return m.setToast("✗ " + err.Error())
+	}
+	m.pickerOpen = false
+	return m.setToast("output · " + sink.Name)
+}
+
+func (m *Model) shiftSections(delta int) tea.Cmd {
+	next := m.sectionShift + delta
+	if next < 0 || next >= len(sections) {
+		return m.setToast("sections fit · nothing to shift")
+	}
+	m.sectionShift = next
+	return nil
+}
