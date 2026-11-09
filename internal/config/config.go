@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -17,9 +18,17 @@ import (
 type Config struct {
 	// ClientID is the Spotify app client id used for the OAuth PKCE flow.
 	ClientID string
-	// Output is the preferred local audio sink; empty means the system default.
+	// Output is the preferred local audio sink id; empty means the system
+	// default (spec S16: a local sink, never a remote Connect device).
 	Output string
+	// CallbackPort is the TCP port the interactive login callback listens on
+	// (spec S12: loopback redirect, IP literal).
+	CallbackPort int
 }
+
+// DefaultCallbackPort is the login callback port used when the config does
+// not set callback_port.
+const DefaultCallbackPort = 8888
 
 // DefaultPath returns the XDG config path for spotify-tui:
 // $XDG_CONFIG_HOME/spotify-tui/config.toml.
@@ -34,6 +43,23 @@ func DefaultPath() string {
 		}
 	}
 	return filepath.Join(base, "spotify-tui", "config.toml")
+}
+
+// StateDir returns the XDG state directory for spotify-tui:
+// $XDG_STATE_HOME/spotify-tui. The device id and the persisted Spotify
+// credentials land there (written 0600 by the session bootstrap), never in
+// the repository (spec S9).
+func StateDir() string {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			base = "."
+		} else {
+			base = filepath.Join(home, ".local", "state")
+		}
+	}
+	return filepath.Join(base, "spotify-tui")
 }
 
 // Load reads the config from DefaultPath.
@@ -76,6 +102,14 @@ func LoadFrom(path string) (Config, error) {
 			cfg.ClientID = value
 		case "output":
 			cfg.Output = value
+		case "callback_port":
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 1 || n > 65535 {
+				return Config{}, fmt.Errorf(
+					"spotify-tui: %s: line %d: callback_port must be a port between 1 and 65535, got %q",
+					path, lineNo, value)
+			}
+			cfg.CallbackPort = n
 		default:
 			// Unknown keys are ignored so future versions stay forward-compatible.
 		}
@@ -86,6 +120,9 @@ func LoadFrom(path string) (Config, error) {
 	if cfg.ClientID == "" {
 		return Config{}, fmt.Errorf(
 			"spotify-tui: %s is missing client_id — add:  client_id = \"your-spotify-client-id\"", path)
+	}
+	if cfg.CallbackPort == 0 {
+		cfg.CallbackPort = DefaultCallbackPort
 	}
 	return cfg, nil
 }

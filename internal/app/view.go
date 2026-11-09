@@ -114,9 +114,16 @@ func (m Model) visibleDataRows() int {
 
 // View renders the whole frame (T3): section row, context strip, full-screen
 // list, queue drawer, player bar, status bar. Total lines == terminal height.
+// Full-screen player states (login, bootstrap failure) replace the frame.
 func (m Model) View() string {
 	if m.w < minWidth {
 		return m.refusalView()
+	}
+	if m.loginURL != "" {
+		return m.loginView()
+	}
+	if m.playerErr != nil {
+		return m.playerErrorView()
 	}
 	var out []string
 	out = append(out, m.topBar(m.w), rule(m.w), m.contextStrip(m.w), rule(m.w))
@@ -133,6 +140,55 @@ func (m Model) View() string {
 	out = append(out, m.playerBar(m.w)...)
 	out = append(out, m.statusBar(m.w))
 	return strings.Join(out, "\n")
+}
+
+// messageView renders full-screen player states (login, bootstrap failure):
+// one padded canvas of h lines, every line inside the width budget.
+func (m Model) messageView(lines []string) string {
+	out := make([]string, 0, m.h)
+	for _, l := range lines {
+		if visibleWidth(l) > m.w {
+			l = theme.ValueStyle.Render(truncate(stripANSI(l), m.w))
+		}
+		out = append(out, l)
+	}
+	for len(out) < m.h {
+		out = append(out, "")
+	}
+	return strings.Join(out[:m.h], "\n")
+}
+
+// loginView surfaces the interactive auth URL instead of hanging silently
+// (spec S9): the URL and where the callback lands, keys at the bottom.
+func (m Model) loginView() string {
+	return m.messageView([]string{
+		"",
+		theme.TitleStyle.Render("login required"),
+		"",
+		theme.ValueStyle.Render("open this URL in a browser and approve the Spotify access:"),
+		"",
+		theme.AccentStyle.Render(truncate(m.loginURL, m.w-2)),
+		"",
+		theme.MetaStyle.Render("the callback lands on " + loginCallbackURL(m.cfg.CallbackPort) +
+			" — playback starts when you return"),
+		"",
+		theme.LabelStyle.Render("ctrl+c quit"),
+	})
+}
+
+// playerErrorView surfaces a bootstrap failure (auth, no Premium, dead
+// output server) instead of failing silently.
+func (m Model) playerErrorView() string {
+	return m.messageView([]string{
+		"",
+		theme.TitleStyle.Render("player error"),
+		"",
+		theme.ValueStyle.Render("✗ " + m.playerErr.Error()),
+		"",
+		theme.MetaStyle.Render("librespot needs Spotify Premium; check the terminal output and restart"),
+		"",
+		theme.LabelStyle.Render("ctrl+c quit"),
+	})
 }
 
 func (m Model) refusalView() string {
@@ -371,6 +427,9 @@ func (m Model) drawerRows(w int) []string {
 func (m Model) pickerBody(h int) []string {
 	sinks := m.data.Sinks()
 	out := []string{" " + theme.LabelStyle.Render("AUDIO OUTPUT"), ""}
+	if len(sinks) == 0 {
+		out = append(out, " "+theme.ValueStyle.Render(theme.GlyphIdle+" no audio output"), "")
+	}
 	for i, sk := range sinks {
 		glyph := theme.GlyphIdle
 		if sk.Active {
@@ -532,8 +591,8 @@ func (m Model) statusBar(w int) string {
 func (m Model) keyHints(maxWidth int) string {
 	hints := [][2]string{
 		{"j/k", "move"}, {"enter", "play"}, {"a", "queue"}, {"space", "pause"},
-		{"n/p", "track"}, {"tab", "view"}, {"q", "drawer"}, {"esc", "back"},
-		{"/", "search"}, {":", "cmd"}, {"d", "output"},
+		{"n/p", "track"}, {"+/-", "volume"}, {"tab", "view"}, {"q", "drawer"},
+		{"esc", "back"}, {"/", "search"}, {":", "cmd"}, {"d", "output"},
 	}
 	var parts []string
 	total := 0
@@ -584,3 +643,7 @@ func totalDuration(tracks []library.Track) time.Duration {
 	}
 	return total
 }
+
+// loginCallbackURL is where the interactive-login callback lands (spec S12:
+// loopback redirect with an IP literal, never localhost).
+func loginCallbackURL(port int) string { return fmt.Sprintf("http://127.0.0.1:%d/login", port) }

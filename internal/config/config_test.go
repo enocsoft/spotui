@@ -93,3 +93,54 @@ func TestDefaultPathUsesXDG(t *testing.T) {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
 	}
 }
+
+func TestLoadFromCallbackPortDefault(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "config.toml", "client_id = \"abc123\"\n")
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.CallbackPort != DefaultCallbackPort {
+		t.Errorf("CallbackPort default = %d, want %d", cfg.CallbackPort, DefaultCallbackPort)
+	}
+}
+
+func TestLoadFromCallbackPortCustom(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "config.toml",
+		"client_id = \"abc123\"\ncallback_port = \"9999\"\n")
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.CallbackPort != 9999 {
+		t.Errorf("CallbackPort = %d, want 9999", cfg.CallbackPort)
+	}
+}
+
+func TestLoadFromCallbackPortInvalid(t *testing.T) {
+	for _, bad := range []string{"0", "65536", "-1", "abc", "\"\""} {
+		path := writeFile(t, t.TempDir(), "config.toml",
+			"client_id = \"abc123\"\ncallback_port = \""+bad+"\"\n")
+		_, err := LoadFrom(path)
+		if err == nil {
+			t.Errorf("callback_port = %s: expected error, got nil", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "callback_port") {
+			t.Errorf("callback_port = %s: error %q should name the key", bad, err)
+		}
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("callback_port = %s: error %q should name the file", bad, err)
+		}
+	}
+}
+
+func TestStateDirUsesXDG(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	got := StateDir()
+	want := filepath.Join(dir, "spotify-tui")
+	if got != want {
+		t.Errorf("StateDir() = %q, want %q", got, want)
+	}
+}

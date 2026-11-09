@@ -53,12 +53,24 @@ type toast struct {
 
 type toastTick struct{ seq int }
 
+// playerEventMsg wraps a library.Event from the real player (EventLogin /
+// EventReady / EventFailed / EventState) into the update loop.
+type playerEventMsg struct{ library.Event }
+
+// tickMsg asks for a re-render so live player state (progress) mirrors
+// without any keypress (Mirror Rule).
+type tickMsg struct{}
+
 // Model is the whole TUI state. Slice 1 renders mock data only (S10).
 type Model struct {
 	cfg    config.Config
 	data   library.DataSource
 	player library.Player
 	clock  func() time.Time
+
+	eventCh   <-chan library.Event // real-player events; nil for the mock
+	loginURL  string               // non-empty: full-screen login state (S9)
+	playerErr error                // non-nil: full-screen player error state
 
 	w, h         int
 	section      Section
@@ -75,13 +87,14 @@ type Model struct {
 	toast        toast
 }
 
-// New builds the model. data and player are interfaces backed by mock data in
-// slice 1; clock is injectable for deterministic tests.
+// New builds the model. data and player are interfaces backed by mock data
+// in slice 1 or by the embedded go-librespot player; clock is injectable for
+// deterministic tests.
 func New(cfg config.Config, data library.DataSource, player library.Player, clock func() time.Time) Model {
 	if clock == nil {
 		clock = time.Now
 	}
-	return Model{
+	m := Model{
 		cfg:       cfg,
 		data:      data,
 		player:    player,
@@ -90,13 +103,46 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 		drillDown: true, // start inside the mock playlist, as in the artboard
 		expanded:  map[string]bool{"PLAYLISTS": true},
 	}
+	if pe, ok := player.(library.PlayerEvents); ok {
+		m.eventCh = pe.Events()
+	}
+	return m
 }
 
 // ActiveSection reports the focused section (used by tests and the status bar).
 func (m *Model) ActiveSection() Section { return m.section }
 
-// Init implements tea.Model.
-func (m Model) Init() tea.Cmd { return nil }
+// Init arms the real-player event relay and the one-second render tick.
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{tickCmd()}
+	if m.eventCh != nil {
+		cmds = append(cmds, waitForEvents(m.eventCh))
+	}
+	return tea.Batch(cmds...)
+}
+
+// waitForEvents relays the next player event into the update loop; a nil
+// message (channel closed) re-arms nothing.
+func waitForEvents(ch <-chan library.Event) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return playerEventMsg{ev}
+	}
+}
+
+func (m Model) rearmEvents() tea.Cmd {
+	if m.eventCh == nil {
+		return nil
+	}
+	return waitForEvents(m.eventCh)
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+}
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -111,6 +157,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toast = toast{}
 		}
 		return m, nil
+
+	case tickMsg:
+		return m, tickCmd()
+
+	case playerEventMsg:
+		switch msg.Type {
+		case library.EventLogin:
+			m.loginURL = msg.LoginURL
+		case library.EventReady:
+			m.loginURL, m.playerErr = "", nil
+		case library.EventFailed:
+			m.playerErr = msg.Err
+		}
+		return m, m.rearmEvents()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -191,6 +251,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.onNext()
 	case "p":
 		return m, m.onPrev()
+	case "+", "=":
+		return m, m.onVolume(1)
+	case "-":
+		return m, m.onVolume(-1)
 	case "tab":
 		m.section = sections[(int(m.section)+1)%len(sections)]
 		m.cursor = 0

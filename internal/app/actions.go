@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,9 +29,16 @@ type row struct {
 	playing bool
 }
 
-// currentTrack resolves the track reported by the Connect session.
+// currentTrack resolves the now-playing track. The real player reports the
+// track text itself (Session.Title); the mock falls back to a TrackID lookup
+// in the playlist.
 func (m Model) currentTrack() (library.Track, bool) {
 	s := m.data.Session()
+	if s.Title != "" {
+		return library.Track{
+			ID: s.TrackID, Title: s.Title, Artist: s.Artist, Album: s.Album, Duration: s.Total,
+		}, true
+	}
 	for _, t := range m.data.Playlist().Tracks {
 		if t.ID == s.TrackID {
 			return t, true
@@ -172,6 +180,20 @@ func (m *Model) onPrev() tea.Cmd {
 		return m.setToast("▶ " + t.Title)
 	}
 	return nil
+}
+
+// onVolume steps the player volume up (+1) or down (-1).
+func (m *Model) onVolume(dir int) tea.Cmd {
+	var err error
+	if dir > 0 {
+		err = m.player.VolumeUp()
+	} else {
+		err = m.player.VolumeDown()
+	}
+	if err != nil {
+		return m.setToast("✗ " + err.Error())
+	}
+	return m.setToast(fmt.Sprintf("volume %d%%", m.data.Session().Volume))
 }
 
 // onToggle handles `l`: expand/collapse on library headers, saved toggle on

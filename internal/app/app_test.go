@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nahuel/spotify-tui/internal/config"
+	"github.com/nahuel/spotify-tui/internal/library"
 	"github.com/nahuel/spotify-tui/internal/library/mock"
 )
 
@@ -16,7 +18,7 @@ var testClock = func() time.Time { return time.Date(2026, 1, 1, 12, 4, 0, 0, tim
 func newModel(t *testing.T, w, h int) *Model {
 	t.Helper()
 	data := mock.New()
-	m := New(config.Config{ClientID: "test-client"}, data, data, testClock)
+	m := New(config.Config{ClientID: "test-client", CallbackPort: config.DefaultCallbackPort}, data, data, testClock)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	model := updated.(Model)
 	return &model
@@ -324,5 +326,99 @@ func TestAudioOutputPicker(t *testing.T) {
 	pressKey(t, m, tea.KeyEsc)
 	if strings.Contains(m.View(), "AUDIO OUTPUT") {
 		t.Error("esc should close the picker")
+	}
+}
+
+// TestVolumeKeysMock: `+` and `-` drive the player volume, clamped 0..100.
+func TestVolumeKeysMock(t *testing.T) {
+	m := newModel(t, 180, 50)
+	press(t, m, "+")
+	press(t, m, "+")
+	if v := m.data.Session().Volume; v != 92 {
+		t.Errorf("volume after two `+` = %d, want 92", v)
+	}
+	press(t, m, "+")
+	if v := m.data.Session().Volume; v != 100 {
+		t.Errorf("volume clamped at top = %d, want 100", v)
+	}
+	press(t, m, "-")
+	press(t, m, "-")
+	if v := m.data.Session().Volume; v != 80 {
+		t.Errorf("volume after two `-` = %d, want 80", v)
+	}
+}
+
+// TestPlayerEventLoginShowsURL: the EventLogin event surfaces the auth URL as
+// a full-screen state instead of hanging silently (spec S9).
+func TestPlayerEventLoginShowsURL(t *testing.T) {
+	m := newModel(t, 180, 50)
+	const url = "https://accounts.spotify.com/authorize?client_id=abc&code_challenge=xyz"
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventLogin, LoginURL: url}})
+	*m = updated.(Model)
+	got := lines(m)
+	if len(got) != 50 {
+		t.Fatalf("login view rendered %d lines, want 50", len(got))
+	}
+	if !strings.Contains(m.View(), "login required") {
+		t.Errorf("login view should say login required, got:\n%s", m.View())
+	}
+	if !strings.Contains(m.View(), url) {
+		t.Errorf("login view should show the auth URL %q", url)
+	}
+	if !strings.Contains(m.View(), "http://127.0.0.1:8888/login") {
+		t.Errorf("login view should say where the callback lands")
+	}
+	for i, line := range got {
+		if width := visibleWidth(line); width > 180 {
+			t.Errorf("login view line %d width %d exceeds 180", i, width)
+		}
+	}
+}
+
+// TestPlayerEventReadyClearsLogin: EventReady returns to the normal frame.
+func TestPlayerEventReadyClearsLogin(t *testing.T) {
+	m := newModel(t, 180, 50)
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventLogin, LoginURL: "https://accounts.spotify.com/authorize?x=1"}})
+	*m = updated.(Model)
+	updated, _ = m.Update(playerEventMsg{library.Event{Type: library.EventReady}})
+	*m = updated.(Model)
+	if strings.Contains(m.View(), "login required") {
+		t.Error("after EventReady the login view should be gone")
+	}
+	if n := len(lines(m)); n != 50 {
+		t.Errorf("normal frame should render 50 lines, got %d", n)
+	}
+}
+
+// TestPlayerEventFailedShowsError: a bootstrap failure is surfaced, never silent.
+func TestPlayerEventFailedShowsError(t *testing.T) {
+	m := newModel(t, 180, 50)
+	updated, _ := m.Update(playerEventMsg{library.Event{
+		Type: library.EventFailed, Err: errors.New("authentication failed")}})
+	*m = updated.(Model)
+	got := m.View()
+	if !strings.Contains(got, "✗") || !strings.Contains(got, "authentication failed") {
+		t.Errorf("failure view should show the error, got:\n%s", got)
+	}
+}
+
+// TestPlayerEventLoginFitsNarrow: the login state must respect the cell budget
+// at narrow widths too; a real auth URL is long, so this is where it can blow up.
+func TestPlayerEventLoginFitsNarrow(t *testing.T) {
+	m := newModel(t, 80, 24)
+	const url = "https://accounts.spotify.com/authorize?client_id=abc123&code_challenge=qWERTY1234567890abcdef&code_challenge_method=S256&scope=user-read-playback-state"
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventLogin, LoginURL: url}})
+	*m = updated.(Model)
+	got := lines(m)
+	if len(got) != 24 {
+		t.Fatalf("login view rendered %d lines at 80x24, want 24", len(got))
+	}
+	for i, line := range got {
+		if w := visibleWidth(line); w > 80 {
+			t.Errorf("line %d is %d columns wide at 80 columns: %q", i, w, line)
+		}
+	}
+	if !strings.Contains(m.View(), "login required") {
+		t.Errorf("login view should still name the state at 80 columns")
 	}
 }
