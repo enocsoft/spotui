@@ -1,0 +1,27 @@
+{
+  "title": "Spotify terminal player",
+  "brief": "Control a Spotify Premium account from the terminal (Spotify Connect, remote playback), k9s/lazygit keyboard model, no modal editing. Main jobs: search any track and play it, browse albums, playlists and liked songs, manage the queue. Three directions for the main screen.",
+  "artboards": [
+    {
+      "file": "01-fullscreen-list.html",
+      "title": "Full-screen list with queue drawer",
+      "tradeoff": "One list owns the whole 180 columns, so titles, artist and album never truncate; the queue is a drawer you toggle with q. Costs you the always-visible queue and one keypress per view change.",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "02-stack-table.html",
+      "title": "Stack table",
+      "tradeoff": "One maximised table per view with six columns and a one-row collection strip. Best scanability and sorting for large lists; you lose the persistent queue and need a key to see it.",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "03-command-first.html",
+      "title": "Command first",
+      "tradeoff": "The palette is the primary entry point: fastest path from thought to a specific track, and type-grouped fuzzy results. Weaker for browsing an album or a playlist by structure, and it is the least discoverable of the three.",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

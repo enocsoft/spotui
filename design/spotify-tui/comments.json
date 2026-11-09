@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "comments": [
+    {
+      "id": "4zvpcpcc",
+      "file": "01-tri-pane.html",
+      "selector": "body",
+      "excerpt": "● spotify Library Search Queue nahuel premium ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ▾ PLAYLISTS 12 ▸ Bebop Essentials 42 Liked Songs 1.2k Deep Focus 86 Roadtrip '99 63 Spinetta Forever 51 Late Night Jazz 120",
+      "comment": "me gustaria que cada columna fueraa full screen \nno tres columnas",
+      "createdAt": "2026-11-09T22:41:48.487Z",
+      "status": "resolved",
+      "sentAt": "2026-11-09T22:43:27.205Z",
+      "resolvedAt": "2026-11-09T22:47:46.272Z"
+    },
+    {
+      "id": "7qp98b0h",
+      "file": "02-stack-table.html",
+      "selector": "body > div > div:nth-of-type(4) > table > tbody > tr:nth-of-type(6) > td:nth-of-type(6)",
+      "excerpt": "♥",
+      "comment": "los corazones remplazalos por [x] 0 []",
+      "createdAt": "2026-11-09T22:42:31.652Z",
+      "status": "resolved",
+      "sentAt": "2026-11-09T22:43:27.205Z",
+      "resolvedAt": "2026-11-09T22:47:46.272Z"
+    },
+    {
+      "id": "eiqtdhj9",
+      "file": "03-command-first.html",
+      "selector": "body > div > section > div:nth-of-type(17) > span:nth-of-type(1)",
+      "excerpt": "└",
+      "comment": "esto me gusta que el buscador sea asi y el coso de commad",
+      "createdAt": "2026-11-09T22:43:25.131Z",
+      "status": "resolved",
+      "sentAt": "2026-11-09T22:43:27.205Z",
+      "resolvedAt": "2026-11-09T22:47:46.272Z"
+    },
+    {
+      "id": "cln0pjin",
+      "file": "01-fullscreen-list.html",
+      "selector": "body",
+      "excerpt": "● spotify │ Bebop Essentials nahuel premium ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── playlists / Bebop Essentials nahuel · private 42 tracks · 2h 51m │ sort: added ↓ ──────────",
+      "comment": "algo asi quiero \n| title  | title | title\naca scrren \n\n\ny si quiere otra title tien que ir haci el costado",
+      "createdAt": "2026-11-09T22:49:41.462Z",
+      "status": "resolved",
+      "sentAt": "2026-11-09T22:49:43.822Z",
+      "resolvedAt": "2026-11-09T22:50:44.632Z"
+    },
+    {
+      "id": "ghawsxqi",
+      "file": "01-fullscreen-list.html",
+      "selector": "body",
+      "excerpt": "● spotify │ Playlist │ Library │ Album │ Queue │ Search │ Devices │ … 3 nahuel premium ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── playlists / Bebop Essentials nahuel · private 42",
+      "comment": "claro asi muy bien pero hay que ver de poner menos pesta;as yya que algunas pueden ser por atajos solo dejar las principales",
+      "createdAt": "2026-11-09T22:52:40.769Z",
+      "status": "resolved",
+      "sentAt": "2026-11-09T22:53:02.133Z",
+      "resolvedAt": "2026-11-09T22:53:56.589Z"
+    }
+  ]
+}

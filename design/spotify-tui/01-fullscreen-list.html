@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440, initial-scale=1">
+<title>spotify-tui — 01 full-screen list</title>
+<style>
+  :root {
+    --canvas: #101215; --rail: #16191d; --surface: #1c2026;
+    --text: #e6e9ee; --text-2: #a8b0bd; --muted: #7d8798;
+    --accent: #69b7e8; --live: #7fd18c; --border: #262b33;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--canvas); color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px; line-height: 17px; font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .term { width: 180ch; height: 50lh; overflow: hidden; display: grid;
+    grid-template-rows: 1lh 1lh 1lh 1lh minmax(0, 1fr) 1lh 8lh 1lh 2lh 1lh; }
+  .rule { color: var(--border); overflow: hidden; white-space: nowrap; }
+  .dim { color: var(--muted); }
+  .sec { color: var(--text-2); }
+  .live { color: var(--live); }
+  .b { font-weight: 700; }
+  kbd { font: inherit; color: var(--text-2); }
+
+  .topbar { display: flex; align-items: center; padding: 0 1ch; gap: 3ch; white-space: nowrap; }
+  .topbar .brand { display: flex; align-items: center; gap: 1ch; }
+  .topbar .dot { color: var(--live); }
+  .topbar .view { color: var(--text); font-weight: 700; }
+  .topbar .right { margin-left: auto; display: flex; gap: 3ch; color: var(--muted); }
+  .topbar a:focus-visible, .track:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+  /* view titles: one row, cell separators, more titles go sideways */
+  .tabs { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .tb { color: var(--muted); text-decoration: none; padding: 0 2ch; }
+  .tb[aria-current="page"] { background: var(--surface); color: var(--text); font-weight: 700; }
+  .tb.more { color: var(--muted); }
+  .tsep { color: var(--muted); }
+  .tb:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+  .crumb { display: flex; gap: 1ch; padding: 0 1ch; align-items: baseline; color: var(--muted); white-space: nowrap; }
+  .crumb .here { color: var(--text); font-weight: 700; }
+  .crumb .right { margin-left: auto; display: flex; gap: 2ch; }
+
+  .tablewrap { min-height: 0; overflow: hidden; }
+  .thead, .track { display: grid; grid-template-columns: 4ch 1fr 30ch 34ch 10ch 8ch;
+    padding: 0 1ch; height: 1lh; align-items: baseline; white-space: nowrap; }
+  .thead { color: var(--muted); }
+  .thead > *, .track > * { overflow: hidden; }
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .track { color: var(--text-2); }
+  .track .num { color: var(--muted); }
+  .track .len { text-align: right; color: var(--muted); }
+  .track .al { color: var(--muted); }
+  .track.selected { background: var(--surface); color: var(--text); font-weight: 700; }
+  .track.selected .al, .track.selected .num, .track.selected .len { color: var(--text-2); font-weight: 400; }
+  .track.playing .num { color: var(--accent); }
+  .thead span:last-child { text-align: right; }
+
+  /* queue drawer: same screen, edge to edge, toggled with q */
+  .drawer-head { display: flex; align-items: baseline; gap: 2ch; padding: 0 1ch;
+    background: var(--rail); color: var(--text-2); border-top: 1px solid var(--border); }
+  .drawer-head .count { margin-left: auto; color: var(--muted); }
+  .drawer { background: var(--rail); min-height: 0; overflow: hidden; }
+  .q { display: grid; grid-template-columns: 4ch 1fr 30ch 34ch 10ch 8ch; padding: 0 1ch;
+    height: 1lh; color: var(--text-2); white-space: nowrap; }
+  .q > span { overflow: hidden; }
+  .q .g { color: var(--muted); }
+  .q .al { color: var(--muted); }
+  .q .len { text-align: right; color: var(--muted); }
+
+  .player { background: var(--surface); display: grid; grid-template-rows: 1lh 1lh; padding: 0 1ch; white-space: nowrap; }
+  .player .p-top { display: grid; grid-template-columns: 40ch 1fr 24ch; align-items: baseline; }
+  .player .p-bot { display: grid; grid-template-columns: 40ch 1fr 40ch; align-items: baseline; color: var(--text-2); }
+  .player .p-bot > span:nth-child(2) { padding-left: 2ch; }
+  .player .title { font-weight: 700; color: var(--text); }
+  .bar .done { color: var(--accent); }
+  .bar .knob { color: var(--text); }
+  .controls { display: flex; gap: 2ch; margin-left: auto; }
+  .controls .fill { color: var(--live); }
+  .dev .g { color: var(--live); }
+
+  .status { display: flex; align-items: center; gap: 3ch; padding: 0 1ch; color: var(--muted);
+    white-space: nowrap; border-top: 1px solid var(--border); }
+  .status .right { margin-left: auto; display: flex; gap: 3ch; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="term">
+
+  <header class="topbar">
+    <span class="brand"><span class="dot" aria-hidden="true">●</span> <span class="b">spotify</span></span>
+    <span class="tsep" aria-hidden="true">│</span>
+    <nav class="tabs" aria-label="Sections">
+      <a class="tb" href="#library" aria-current="page">Library</a>
+      <span class="tsep" aria-hidden="true">│</span>
+      <a class="tb" href="#search">Search</a>
+      <span class="tsep" aria-hidden="true">│</span>
+      <a class="tb" href="#queue">Queue</a>
+    </nav>
+    <span class="right">
+      <span class="dim">nahuel</span>
+      <span class="dim">premium</span>
+    </span>
+  </header>
+
+  <div class="rule" aria-hidden="true">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <div class="crumb">
+    <span>playlists</span><span aria-hidden="true">/</span><span class="here">Bebop Essentials</span>
+    <span class="dim">nahuel · private</span>
+    <span class="right"><span>42 tracks · 2h 51m</span><span aria-hidden="true">│</span><span>sort: added ↓</span></span>
+  </div>
+
+  <div class="rule" aria-hidden="true">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <main class="tablewrap" aria-label="Bebop Essentials tracks">
+    <div class="thead" role="row">
+      <span>#</span><span>TITLE</span><span>ARTIST</span><span>ALBUM</span><span>ADDED</span><span>TIME</span>
+    </div>
+    <ul class="rows">
+        <li class="track playing"><span class="num" aria-label="playing">▶</span><span>So What</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al">12 Nov</span><span class="len">9:22</span></li>
+        <li class="track selected"><span class="num">2</span><span>Moanin'</span><span class="al">Art Blakey</span><span class="al">Moanin'</span><span class="al">11 Nov</span><span class="len">9:34</span></li>
+        <li class="track"><span class="num">3</span><span>Giant Steps</span><span class="al">John Coltrane</span><span class="al">Giant Steps</span><span class="al">10 Nov</span><span class="len">4:46</span></li>
+        <li class="track"><span class="num">4</span><span>'Round Midnight</span><span class="al">Thelonious Monk</span><span class="al">Genius of Modern Music</span><span class="al">9 Nov</span><span class="len">6:38</span></li>
+        <li class="track"><span class="num">5</span><span>Blue in Green</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al">8 Nov</span><span class="len">5:38</span></li>
+        <li class="track"><span class="num">6</span><span>Chega de Saudade</span><span class="al">João Gilberto</span><span class="al">Chega de Saudade</span><span class="al">7 Nov</span><span class="len">2:02</span></li>
+        <li class="track"><span class="num">7</span><span>Bemsha Swing</span><span class="al">Thelonious Monk</span><span class="al">Brilliant Corners</span><span class="al">6 Nov</span><span class="len">7:41</span></li>
+        <li class="track"><span class="num">8</span><span>A Night in Tunisia</span><span class="al">Dizzy Gillespie</span><span class="al">The Champ</span><span class="al">5 Nov</span><span class="len">3:06</span></li>
+        <li class="track"><span class="num">9</span><span>Freddie Freeloader</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al">4 Nov</span><span class="len">9:47</span></li>
+        <li class="track"><span class="num">10</span><span>Misterioso</span><span class="al">Thelonious Monk</span><span class="al">Thelonious in Action</span><span class="al">3 Nov</span><span class="len">9:21</span></li>
+        <li class="track"><span class="num">11</span><span>Naima</span><span class="al">John Coltrane</span><span class="al">Giant Steps</span><span class="al">2 Nov</span><span class="len">4:21</span></li>
+        <li class="track"><span class="num">12</span><span>Desafinado</span><span class="al">Stan Getz</span><span class="al">Getz/Gilberto</span><span class="al">1 Nov</span><span class="len">5:49</span></li>
+        <li class="track"><span class="num">13</span><span>All Blues</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al">31 Oct</span><span class="len">11:33</span></li>
+        <li class="track"><span class="num">14</span><span>Take Five</span><span class="al">Dave Brubeck</span><span class="al">Time Out</span><span class="al">30 Oct</span><span class="len">5:24</span></li>
+        <li class="track"><span class="num">15</span><span>Straight, No Chaser</span><span class="al">Thelonious Monk</span><span class="al">Straight, No Chaser</span><span class="al">29 Oct</span><span class="len">8:03</span></li>
+        <li class="track"><span class="num">16</span><span>Flamenco Sketches</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al">28 Oct</span><span class="len">9:26</span></li>
+        <li class="track"><span class="num">17</span><span>Confirmation</span><span class="al">Charlie Parker</span><span class="al">Now's the Time</span><span class="al">27 Oct</span><span class="len">3:00</span></li>
+        <li class="track"><span class="num">18</span><span>Ornithology</span><span class="al">Charlie Parker</span><span class="al">Bird at the Roost</span><span class="al">26 Oct</span><span class="len">3:01</span></li>
+        <li class="track"><span class="num">19</span><span>Anthropology</span><span class="al">Charlie Parker</span><span class="al">The Complete Savoy</span><span class="al">25 Oct</span><span class="len">3:12</span></li>
+        <li class="track"><span class="num">20</span><span>Donna Lee</span><span class="al">Charlie Parker</span><span class="al">The Complete Savoy</span><span class="al">24 Oct</span><span class="len">2:34</span></li>
+        <li class="track"><span class="num">21</span><span>Ko-Ko</span><span class="al">Charlie Parker</span><span class="al">The Complete Savoy</span><span class="al">23 Oct</span><span class="len">2:56</span></li>
+        <li class="track"><span class="num">22</span><span>Salt Peanuts</span><span class="al">Dizzy Gillespie</span><span class="al">Groovin' High</span><span class="al">22 Oct</span><span class="len">3:17</span></li>
+        <li class="track"><span class="num">23</span><span>Groovin' High</span><span class="al">Dizzy Gillespie</span><span class="al">Groovin' High</span><span class="al">21 Oct</span><span class="len">2:41</span></li>
+        <li class="track"><span class="num">24</span><span>Hot House</span><span class="al">Dizzy Gillespie</span><span class="al">Groovin' High</span><span class="al">20 Oct</span><span class="len">3:08</span></li>
+        <li class="track"><span class="num">25</span><span>Blue Monk</span><span class="al">Thelonious Monk</span><span class="al">Blue Monk</span><span class="al">19 Oct</span><span class="len">7:37</span></li>
+        <li class="track"><span class="num">26</span><span>Epistrophy</span><span class="al">Thelonious Monk</span><span class="al">Blue Monk</span><span class="al">18 Oct</span><span class="len">3:14</span></li>
+        <li class="track"><span class="num">27</span><span>Well, You Needn't</span><span class="al">Thelonious Monk</span><span class="al">Blue Monk</span><span class="al">17 Oct</span><span class="len">3:22</span></li>
+        <li class="track"><span class="num">28</span><span>Ruby, My Dear</span><span class="al">Thelonious Monk</span><span class="al">Blue Monk</span><span class="al">16 Oct</span><span class="len">6:20</span></li>
+        <li class="track"><span class="num">29</span><span>Four on Six</span><span class="al">Wes Montgomery</span><span class="al">The Incredible Jazz Guitar</span><span class="al">15 Oct</span><span class="len">6:09</span></li>
+        <li class="track"><span class="num">30</span><span>West Coast Blues</span><span class="al">Wes Montgomery</span><span class="al">The Incredible Jazz Guitar</span><span class="al">14 Oct</span><span class="len">7:24</span></li>
+        <li class="track"><span class="num">31</span><span>Song for My Father</span><span class="al">Horace Silver</span><span class="al">Song for My Father</span><span class="al">13 Oct</span><span class="len">7:17</span></li>
+        <li class="track"><span class="num">32</span><span>Moanin' (alt take)</span><span class="al">Art Blakey</span><span class="al">Moanin'</span><span class="al">12 Oct</span><span class="len">9:47</span></li>
+        <li class="track"><span class="num">33</span><span>Cool Struttin'</span><span class="al">Sonny Clark</span><span class="al">Cool Struttin'</span><span class="al">11 Oct</span><span class="len">9:27</span></li>
+        <li class="track"><span class="num">34</span><span>Blues Walk</span><span class="al">Lou Donaldson</span><span class="al">Blues Walk</span><span class="al">10 Oct</span><span class="len">6:23</span></li>
+        <li class="track"><span class="num">35</span><span>Watermelon Man</span><span class="al">Herbie Hancock</span><span class="al">Takin' Off</span><span class="al">9 Oct</span><span class="len">7:09</span></li>
+        <li class="track"><span class="num">36</span><span>Cantaloupe Island</span><span class="al">Herbie Hancock</span><span class="al">Empyrean Isles</span><span class="al">8 Oct</span><span class="len">5:29</span></li>
+        <li class="track"><span class="num">37</span><span>Maiden Voyage</span><span class="al">Herbie Hancock</span><span class="al">Maiden Voyage</span><span class="al">7 Oct</span><span class="len">7:53</span></li>
+        <li class="track"><span class="num">38</span><span>Footprints</span><span class="al">Wayne Shorter</span><span class="al">Adam's Apple</span><span class="al">6 Oct</span><span class="len">7:30</span></li>
+        <li class="track"><span class="num">39</span><span>Speak No Evil</span><span class="al">Wayne Shorter</span><span class="al">Speak No Evil</span><span class="al">5 Oct</span><span class="len">8:22</span></li>
+        <li class="track"><span class="num">40</span><span>Yes or No</span><span class="al">Wayne Shorter</span><span class="al">JuJu</span><span class="al">4 Oct</span><span class="len">6:36</span></li>
+        <li class="track"><span class="num">41</span><span>Acknowledgement</span><span class="al">John Coltrane</span><span class="al">A Love Supreme</span><span class="al">3 Oct</span><span class="len">7:43</span></li>
+        <li class="track"><span class="num">42</span><span>Resolution</span><span class="al">John Coltrane</span><span class="al">A Love Supreme</span><span class="al">2 Oct</span><span class="len">7:20</span></li>
+    </ul>
+  </main>
+
+  <div class="drawer-head">
+    <span aria-hidden="true">▾</span><span>QUEUE</span>
+    <span class="dim">up next 8 of 41</span>
+    <span class="count">2h 41m · repeat playlist</span>
+  </div>
+
+  <div class="drawer">
+    <ul class="rows">
+      <li class="q"><span class="g" aria-hidden="true">▸</span><span>Moanin'</span><span class="al">Art Blakey</span><span class="al">Moanin'</span><span class="al"></span><span class="len">9:34</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>Giant Steps</span><span class="al">John Coltrane</span><span class="al">Giant Steps</span><span class="al"></span><span class="len">4:46</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>'Round Midnight</span><span class="al">Thelonious Monk</span><span class="al">Genius of Modern Music</span><span class="al"></span><span class="len">6:38</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>Blue in Green</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al"></span><span class="len">5:38</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>Chega de Saudade</span><span class="al">João Gilberto</span><span class="al">Chega de Saudade</span><span class="al"></span><span class="len">2:02</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>Bemsha Swing</span><span class="al">Thelonious Monk</span><span class="al">Brilliant Corners</span><span class="al"></span><span class="len">7:41</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>A Night in Tunisia</span><span class="al">Dizzy Gillespie</span><span class="al">The Champ</span><span class="al"></span><span class="len">3:06</span></li>
+      <li class="q"><span class="g" aria-hidden="true"> </span><span>Freddie Freeloader</span><span class="al">Miles Davis</span><span class="al">Kind of Blue</span><span class="al"></span><span class="len">9:47</span></li>
+    </ul>
+  </div>
+
+  <div class="rule" aria-hidden="true">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <footer class="player">
+    <div class="p-top">
+      <span><span class="live" aria-hidden="true">▶</span> <span class="title">So What</span></span>
+      <span class="sec">Miles Davis — Kind of Blue · 1959</span>
+      <span class="dev" style="text-align:right">192 kbps <span class="dim">|</span> <span class="g" aria-hidden="true">▸</span> Living Room</span>
+    </div>
+    <div class="p-bot">
+      <span class="bar"><span aria-hidden="true">0:42</span> <span class="done" aria-hidden="true">━━━━━</span><span class="knob" aria-hidden="true">●</span><span aria-hidden="true">──────────────────────</span> 9:22</span>
+      <span class="vol">shuffle off · repeat playlist</span>
+      <span class="controls"><span class="dim">vol</span> <span class="fill" aria-hidden="true">███████</span><span class="dim" aria-hidden="true">░░░</span> 72%</span>
+    </div>
+  </footer>
+
+  <footer class="status">
+    <span><kbd>j</kbd><kbd>k</kbd> move</span>
+    <span><kbd>enter</kbd> play</span>
+    <span><kbd>a</kbd> queue</span>
+    <span><kbd>space</kbd> pause</span>
+    <span><kbd>n</kbd><kbd>p</kbd> track</span>
+    <span><kbd>tab</kbd> view</span>
+    <span><kbd>q</kbd> drawer</span>
+    <span><kbd>esc</kbd> back</span>
+    <span><kbd>/</kbd> search</span>
+    <span><kbd>:</kbd> cmd</span>
+    <span><kbd>d</kbd> device</span>
+    <span class="right"><span>library / playlist</span><span>12:04</span></span>
+  </footer>
+
+</div>
+</body>
+</html>

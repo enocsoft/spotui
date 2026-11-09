@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440, initial-scale=1">
+<title>spotify-tui — 02 stack table</title>
+<style>
+  :root {
+    --canvas: #101215;
+    --rail: #16191d;
+    --surface: #1c2026;
+    --text: #e6e9ee;
+    --text-2: #a8b0bd;
+    --muted: #7d8798;
+    --accent: #69b7e8;
+    --live: #7fd18c;
+    --border: #262b33;
+    --warn: #e0b46a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--canvas);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 17px;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .term { width: 180ch; height: 50lh; overflow: hidden; display: grid; grid-template-rows: 1lh 1lh 1lh 1lh minmax(0, 1fr) 1lh 1lh 2lh 1lh; }
+  .rule { color: var(--border); overflow: hidden; white-space: nowrap; }
+  .dim { color: var(--muted); }
+  .sec { color: var(--text-2); }
+  .accent { color: var(--accent); }
+  .live { color: var(--live); }
+  .warn { color: var(--warn); }
+
+  .topbar { display: flex; align-items: center; padding: 0 1ch; gap: 3ch; white-space: nowrap; }
+  .brand { font-weight: 700; }
+  .tabs { display: flex; gap: 1ch; }
+  .tab { color: var(--muted); text-decoration: none; padding: 0 1ch; }
+  .tab i { color: var(--muted); font-style: normal; }
+  .tab[aria-current="page"] { color: var(--text); background: var(--surface); font-weight: 700; }
+  .tab[aria-current="page"] i { color: var(--accent); }
+  .tab:focus-visible, a:focus-visible, tr:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .topbar .right { margin-left: auto; display: flex; gap: 3ch; color: var(--muted); }
+  .topbar kbd { font: inherit; color: var(--text-2); }
+
+  /* one-row context strip: the collection being shown, stated once */
+  .strip { display: flex; align-items: baseline; gap: 2ch; padding: 0 1ch; white-space: nowrap; }
+  .strip .name { font-weight: 700; color: var(--text); }
+  .strip .sep { color: var(--border); }
+  .strip .right { margin-left: auto; display: flex; gap: 2ch; color: var(--muted); }
+
+  .tablewrap { min-height: 0; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font: inherit; }
+  caption { text-align: left; color: var(--muted); padding: 0 1ch; height: 1lh; }
+  th, td { text-align: left; font-weight: 400; height: 1lh; padding: 0 1ch; white-space: nowrap; overflow: hidden; }
+  thead th { color: var(--muted); }
+  thead th.num { text-align: right; }
+  tbody td { color: var(--text-2); }
+  tbody td.num { color: var(--muted); text-align: right; }
+  tbody td.title { color: var(--text); }
+  tbody td.saved { color: var(--muted); }
+  tbody td.saved.on { color: var(--live); }
+  tbody tr.selected td.saved.on { color: var(--live); }
+  tr.playing td { background: var(--rail); }
+  tr.playing td.title { color: var(--text); font-weight: 700; }
+  tr.playing td.num { color: var(--accent); }
+  tr.selected td { background: var(--surface); color: var(--text); }
+  tr.selected td.num, tr.selected td.meta { color: var(--text-2); }
+  tr.unavailable td { color: var(--muted); }
+  tr.unavailable td.title { text-decoration: line-through; }
+  .col-num { width: 5ch; }
+  .col-title { width: 40ch; }
+  .col-artist { width: 24ch; }
+  .col-album { width: 28ch; }
+  .col-added { width: 12ch; }
+  .col-check { width: 6ch; }
+  .col-time { width: 7ch; }
+
+  .tablefoot { display: flex; padding: 0 1ch; color: var(--muted); white-space: nowrap; }
+  .tablefoot .right { margin-left: auto; display: flex; gap: 2ch; }
+
+  .player { background: var(--surface); display: grid; grid-template-rows: 1lh 1lh; padding: 0 1ch; white-space: nowrap; }
+  .player .p-top { display: grid; grid-template-columns: 40ch 1fr 22ch; align-items: baseline; }
+  .player .p-bot { display: grid; grid-template-columns: 40ch 1fr 40ch; align-items: baseline; color: var(--text-2); }
+  .player .p-bot > span:nth-child(2) { padding-left: 2ch; }
+  .player .title { font-weight: 700; color: var(--text); }
+  .bar .done { color: var(--accent); }
+  .bar .knob { color: var(--text); }
+  .vol .fill, .controls .fill { color: var(--live); }
+  .controls { display: flex; gap: 2ch; margin-left: auto; }
+  .dev .g { color: var(--live); }
+
+  .status { display: flex; align-items: center; gap: 3ch; padding: 0 1ch; color: var(--muted); white-space: nowrap; border-top: 1px solid var(--border); }
+  .status kbd { font: inherit; color: var(--text-2); }
+  .status .right { margin-left: auto; display: flex; gap: 3ch; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="term">
+
+  <header class="topbar">
+    <span class="brand">spotify</span>
+    <nav class="tabs" aria-label="Views">
+      <a class="tab" href="#library"><i>1</i> Library</a>
+      <a class="tab" href="#search"><i>2</i> Search</a>
+      <a class="tab" href="#playlist" aria-current="page"><i>3</i> Playlist</a>
+      <a class="tab" href="#queue"><i>4</i> Queue</a>
+    </nav>
+    <span class="right">
+      <span><kbd>/</kbd> filter</span>
+      <span><kbd>esc</kbd> clear</span>
+    </span>
+  </header>
+
+  <div class="rule" aria-hidden="true">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <div class="strip">
+    <span class="name">Música para Laburar</span>
+    <span class="sep" aria-hidden="true">│</span>
+    <span class="sec">nahuel</span>
+    <span class="sep" aria-hidden="true">│</span>
+    <span class="dim">public</span>
+    <span class="right">
+      <span>96 tracks</span>
+      <span class="sep" aria-hidden="true">│</span>
+      <span>6h 12m</span>
+      <span class="sep" aria-hidden="true">│</span>
+      <span>sort: added ↓</span>
+    </span>
+  </div>
+
+  <div class="rule" aria-hidden="true">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="col-num num" scope="col">#</th>
+          <th class="col-title" scope="col">TITLE</th>
+          <th class="col-artist" scope="col">ARTIST</th>
+          <th class="col-album" scope="col">ALBUM</th>
+          <th class="col-added" scope="col">ADDED</th>
+          <th class="col-check" scope="col">SAVED</th>
+          <th class="col-time num" scope="col">TIME</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="playing">
+          <td class="num" aria-label="playing">▶</td>
+          <td class="title">So What</td>
+          <td>Miles Davis</td>
+          <td>Kind of Blue</td>
+          <td class="meta">9 Nov</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">9:22</td>
+        </tr>
+        <tr class="selected">
+          <td class="num">2</td>
+          <td class="title">Nude</td>
+          <td>Radiohead</td>
+          <td>In Rainbows</td>
+          <td class="meta">8 Nov</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">4:15</td>
+        </tr>
+        <tr class="">
+          <td class="num">3</td>
+          <td class="title">Bocanada</td>
+          <td>Gustavo Cerati</td>
+          <td>Bocanada</td>
+          <td class="meta">6 Nov</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:24</td>
+        </tr>
+        <tr class="">
+          <td class="num">4</td>
+          <td class="title">Glory Box</td>
+          <td>Portishead</td>
+          <td>Dummy</td>
+          <td class="meta">5 Nov</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:06</td>
+        </tr>
+        <tr class="">
+          <td class="num">5</td>
+          <td class="title">Moanin'</td>
+          <td>Art Blakey</td>
+          <td>Moanin'</td>
+          <td class="meta">4 Nov</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">9:34</td>
+        </tr>
+        <tr class="">
+          <td class="num">6</td>
+          <td class="title">De Música Ligera</td>
+          <td>Soda Stereo</td>
+          <td>Canción Animal</td>
+          <td class="meta">3 Nov</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">3:33</td>
+        </tr>
+        <tr class="">
+          <td class="num">7</td>
+          <td class="title">Blue in Green</td>
+          <td>Miles Davis</td>
+          <td>Kind of Blue</td>
+          <td class="meta">2 Nov</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:38</td>
+        </tr>
+        <tr class="">
+          <td class="num">8</td>
+          <td class="title">Weird Fishes / Arpeggi</td>
+          <td>Radiohead</td>
+          <td>In Rainbows</td>
+          <td class="meta">1 Nov</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:18</td>
+        </tr>
+        <tr class="">
+          <td class="num">9</td>
+          <td class="title">Crimen</td>
+          <td>Gustavo Cerati</td>
+          <td>Ahí Vamos</td>
+          <td class="meta">31 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:53</td>
+        </tr>
+        <tr class="">
+          <td class="num">10</td>
+          <td class="title">Roads</td>
+          <td>Portishead</td>
+          <td>Dummy</td>
+          <td class="meta">30 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">5:03</td>
+        </tr>
+        <tr class="">
+          <td class="num">11</td>
+          <td class="title">Giant Steps</td>
+          <td>John Coltrane</td>
+          <td>Giant Steps</td>
+          <td class="meta">29 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:46</td>
+        </tr>
+        <tr class="">
+          <td class="num">12</td>
+          <td class="title">Mañana en el Abasto</td>
+          <td>Spinetta</td>
+          <td>Pelusón of Milk</td>
+          <td class="meta">28 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">6:12</td>
+        </tr>
+        <tr class="">
+          <td class="num">13</td>
+          <td class="title">Take Five</td>
+          <td>Dave Brubeck</td>
+          <td>Time Out</td>
+          <td class="meta">27 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:24</td>
+        </tr>
+        <tr class="unavailable">
+          <td class="num">14</td>
+          <td class="title">Flamenco Sketches</td>
+          <td>Miles Davis</td>
+          <td class="meta">region lock</td>
+          <td class="meta">26 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">9:26</td>
+        </tr>
+        <tr class="">
+          <td class="num">15</td>
+          <td class="title">'Round Midnight</td>
+          <td>Thelonious Monk</td>
+          <td>Genius of Modern Music</td>
+          <td class="meta">25 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">6:38</td>
+        </tr>
+        <tr class="">
+          <td class="num">16</td>
+          <td class="title">Karma Police</td>
+          <td>Radiohead</td>
+          <td>OK Computer</td>
+          <td class="meta">24 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:21</td>
+        </tr>
+        <tr class="">
+          <td class="num">17</td>
+          <td class="title">Chacarera del Silencio</td>
+          <td>Mercedes Sosa</td>
+          <td>Cantora</td>
+          <td class="meta">23 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">3:58</td>
+        </tr>
+        <tr class="">
+          <td class="num">18</td>
+          <td class="title">All Blues</td>
+          <td>Miles Davis</td>
+          <td>Kind of Blue</td>
+          <td class="meta">22 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">11:33</td>
+        </tr>
+        <tr class="">
+          <td class="num">19</td>
+          <td class="title">Bemsha Swing</td>
+          <td>Thelonious Monk</td>
+          <td>Brilliant Corners</td>
+          <td class="meta">21 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">7:41</td>
+        </tr>
+        <tr class="">
+          <td class="num">20</td>
+          <td class="title">Cactus</td>
+          <td>Gustavo Cerati</td>
+          <td>Ahí Vamos</td>
+          <td class="meta">20 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:19</td>
+        </tr>
+        <tr class="">
+          <td class="num">21</td>
+          <td class="title">Desafinado</td>
+          <td>Stan Getz</td>
+          <td>Getz/Gilberto</td>
+          <td class="meta">19 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:49</td>
+        </tr>
+        <tr class="">
+          <td class="num">22</td>
+          <td class="title">Naima</td>
+          <td>John Coltrane</td>
+          <td>Giant Steps</td>
+          <td class="meta">18 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">4:21</td>
+        </tr>
+        <tr class="">
+          <td class="num">23</td>
+          <td class="title">Sour Times</td>
+          <td>Portishead</td>
+          <td>Dummy</td>
+          <td class="meta">17 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:11</td>
+        </tr>
+        <tr class="">
+          <td class="num">24</td>
+          <td class="title">Persiana Americana</td>
+          <td>Soda Stereo</td>
+          <td>Signos</td>
+          <td class="meta">16 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:41</td>
+        </tr>
+        <tr class="">
+          <td class="num">25</td>
+          <td class="title">Cantaloupe Island</td>
+          <td>Herbie Hancock</td>
+          <td>Empyrean Isles</td>
+          <td class="meta">15 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:29</td>
+        </tr>
+        <tr class="">
+          <td class="num">26</td>
+          <td class="title">Adiós Nonino</td>
+          <td>Astor Piazzolla</td>
+          <td>Adiós Nonino</td>
+          <td class="meta">14 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">8:12</td>
+        </tr>
+        <tr class="">
+          <td class="num">27</td>
+          <td class="title">No Surprises</td>
+          <td>Radiohead</td>
+          <td>OK Computer</td>
+          <td class="meta">13 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">3:48</td>
+        </tr>
+        <tr class="">
+          <td class="num">28</td>
+          <td class="title">Lago en el Cielo</td>
+          <td>Gustavo Cerati</td>
+          <td>Ahí Vamos</td>
+          <td class="meta">12 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:28</td>
+        </tr>
+        <tr class="">
+          <td class="num">29</td>
+          <td class="title">Song for My Father</td>
+          <td>Horace Silver</td>
+          <td>Song for My Father</td>
+          <td class="meta">11 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">7:17</td>
+        </tr>
+        <tr class="">
+          <td class="num">30</td>
+          <td class="title">Los Libros de la Buena Memoria</td>
+          <td>Invisible</td>
+          <td>El Jardín de los Presentes</td>
+          <td class="meta">10 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">6:04</td>
+        </tr>
+        <tr class="">
+          <td class="num">31</td>
+          <td class="title">Footprints</td>
+          <td>Wayne Shorter</td>
+          <td>Adam's Apple</td>
+          <td class="meta">9 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">7:30</td>
+        </tr>
+        <tr class="">
+          <td class="num">32</td>
+          <td class="title">Viernes 3 AM</td>
+          <td>Serú Girán</td>
+          <td>Bicicleta</td>
+          <td class="meta">8 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:36</td>
+        </tr>
+        <tr class="">
+          <td class="num">33</td>
+          <td class="title">Misterioso</td>
+          <td>Thelonious Monk</td>
+          <td>Thelonious in Action</td>
+          <td class="meta">7 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">9:21</td>
+        </tr>
+        <tr class="">
+          <td class="num">34</td>
+          <td class="title">Everything in Its Right Place</td>
+          <td>Radiohead</td>
+          <td>Kid A</td>
+          <td class="meta">6 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">4:11</td>
+        </tr>
+        <tr class="">
+          <td class="num">35</td>
+          <td class="title">Alfonsina y el Mar</td>
+          <td>Mercedes Sosa</td>
+          <td>Mujeres Argentinas</td>
+          <td class="meta">5 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:32</td>
+        </tr>
+        <tr class="">
+          <td class="num">36</td>
+          <td class="title">Maiden Voyage</td>
+          <td>Herbie Hancock</td>
+          <td>Maiden Voyage</td>
+          <td class="meta">4 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">7:53</td>
+        </tr>
+        <tr class="">
+          <td class="num">37</td>
+          <td class="title">El Tesoro</td>
+          <td>Spinetta</td>
+          <td>Kamikaze</td>
+          <td class="meta">3 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:14</td>
+        </tr>
+        <tr class="">
+          <td class="num">38</td>
+          <td class="title">Wandering Star</td>
+          <td>Portishead</td>
+          <td>Dummy</td>
+          <td class="meta">2 Oct</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">4:51</td>
+        </tr>
+        <tr class="">
+          <td class="num">39</td>
+          <td class="title">Bailando</td>
+          <td>Soda Stereo</td>
+          <td>Dynamo</td>
+          <td class="meta">1 Oct</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">5:02</td>
+        </tr>
+        <tr class="">
+          <td class="num">40</td>
+          <td class="title">Blue Monk</td>
+          <td>Thelonious Monk</td>
+          <td>Blue Monk</td>
+          <td class="meta">30 Sep</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">7:37</td>
+        </tr>
+        <tr class="">
+          <td class="num">41</td>
+          <td class="title">Puente</td>
+          <td>Gustavo Cerati</td>
+          <td>Siempre Es Hoy</td>
+          <td class="meta">29 Sep</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:24</td>
+        </tr>
+        <tr class="">
+          <td class="num">42</td>
+          <td class="title">Yes or No</td>
+          <td>Wayne Shorter</td>
+          <td>JuJu</td>
+          <td class="meta">28 Sep</td>
+          <td class="saved off" aria-label="not saved">[ ]</td>
+          <td class="num">6:36</td>
+        </tr>
+        <tr class="">
+          <td class="num">43</td>
+          <td class="title">The Rip</td>
+          <td>Portishead</td>
+          <td>Third</td>
+          <td class="meta">27 Sep</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">4:12</td>
+        </tr>
+        <tr class="">
+          <td class="num">44</td>
+          <td class="title">Alas</td>
+          <td>Soda Stereo</td>
+          <td>Signos</td>
+          <td class="meta">26 Sep</td>
+          <td class="saved on" aria-label="saved">[x]</td>
+          <td class="num">3:47</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tablefoot">
+    
+    <span class="right">
+      <span>filter: none</span>
+      <span class="sep" aria-hidden="true">│</span>
+      <span>1 region lock</span>
+    </span>
+  </div>
+
+  <div class="rule" aria-hidden="true">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <footer class="player">
+    <div class="p-top">
+      <span><span class="live" aria-hidden="true">▶</span> <span class="title">So What</span></span>
+      <span class="sec">Miles Davis — Kind of Blue · 1959</span>
+      <span class="dev" style="text-align:right"><span class="g" aria-hidden="true">▸</span> Living Room · 192 kbps</span>
+    </div>
+    <div class="p-bot">
+      <span class="bar"><span aria-hidden="true">0:42</span> <span class="done" aria-hidden="true">━━━━━</span><span class="knob" aria-hidden="true">●</span><span aria-hidden="true">──────────────────────</span> 9:22</span>
+      <span class="vol"><span class="dim">shuffle</span> off <span class="dim">·</span> <span class="dim">repeat</span> playlist</span>
+      <span class="controls"><span class="dim">vol</span> <span class="fill" aria-hidden="true">███████</span><span class="dim" aria-hidden="true">░░░</span> 72%</span>
+    </div>
+  </footer>
+
+  <footer class="status">
+    <span><kbd>j</kbd><kbd>k</kbd> move</span>
+    <span><kbd>enter</kbd> play</span>
+    <span><kbd>a</kbd> queue</span>
+    <span><kbd>l</kbd> save</span>
+    <span><kbd>space</kbd> pause</span>
+    <span><kbd>,</kbd> sort</span>
+    <span><kbd>/</kbd> filter</span>
+    <span><kbd>:</kbd> cmd</span>
+    <span><kbd>d</kbd> device</span>
+    <span class="right"><span>view 3 of 4</span><span>12:04</span></span>
+  </footer>
+
+</div>
+</body>
+</html>

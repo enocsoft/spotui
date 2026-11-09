@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440, initial-scale=1">
+<title>spotify-tui — 03 command first</title>
+<style>
+  :root {
+    --canvas: #101215;
+    --rail: #16191d;
+    --surface: #1c2026;
+    --text: #e6e9ee;
+    --text-2: #a8b0bd;
+    --muted: #7d8798;
+    --accent: #69b7e8;
+    --live: #7fd18c;
+    --border: #262b33;
+    --edge: #3d4552;
+    --surface-2: #252c35;
+    --warn: #e0b46a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--canvas);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 17px;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .term { position: relative; width: 180ch; height: 50lh; overflow: hidden; display: grid; grid-template-rows: 1lh 1lh minmax(0, 1fr) 1lh 2lh 1lh; }
+  .rule { color: var(--border); overflow: hidden; white-space: nowrap; }
+  .dim { color: var(--muted); }
+  .sec { color: var(--text-2); }
+  .accent { color: var(--accent); }
+  .live { color: var(--live); }
+  .b { font-weight: 700; }
+
+  .topbar { display: flex; align-items: center; padding: 0 1ch; gap: 3ch; white-space: nowrap; }
+  .brand { font-weight: 700; }
+  .topbar .right { margin-left: auto; display: flex; gap: 3ch; color: var(--muted); }
+  .topbar kbd { font: inherit; color: var(--text-2); }
+
+  /* background: the album you are listening to, inactive while the palette is open */
+  .behind { min-height: 0; overflow: hidden; color: var(--muted); }
+  .bhead { display: flex; gap: 2ch; padding: 0 1ch; height: 1lh; }
+  .bhead .name { color: var(--text-2); font-weight: 700; }
+  .bhead .right { margin-left: auto; }
+  .bring { display: grid; grid-template-columns: 4ch 1fr 26ch 8ch; padding: 0 1ch; height: 1lh; white-space: nowrap; }
+  .bring > span { overflow: hidden; }
+  .bring .n, .bring .len { color: var(--muted); }
+  .bring .len { text-align: right; }
+
+  /* palette, drawn with cells: flex fill clips the dash run at the real edge */
+  .palette {
+    position: absolute;
+    top: 14lh;
+    left: 38ch;
+    width: 104ch;
+    background: var(--surface);
+    box-shadow: none;
+  }
+  .pline { display: flex; height: 1lh; color: var(--edge); white-space: nowrap; }
+  .pline .dash { flex: 1; overflow: hidden; }
+  .prow { display: grid; grid-template-columns: 1ch 1fr 1ch; height: 1lh; }
+  .prow .edge { color: var(--edge); }
+  .prow .cell { display: flex; align-items: baseline; gap: 2ch; padding: 0 1ch; min-width: 0; white-space: nowrap; overflow: hidden; }
+  .prow .cell .meta { margin-left: auto; color: var(--muted); }
+  .prow.head .cell { color: var(--accent); font-weight: 700; }
+  .prow.head .cell .meta { color: var(--muted); font-weight: 400; }
+  .prow.input .cell { color: var(--text); }
+  .prow.input .prompt { color: var(--accent); }
+  .prow.input .cursor { background: var(--accent); color: var(--surface); }
+  .prow.sep .cell { padding: 0; }
+  .prow.sep .fill { flex: 1; overflow: hidden; color: var(--edge); }
+  .prow.sect .cell { color: var(--muted); }
+  .prow.hit .cell { color: var(--text-2); }
+  .prow.hit .cell .m { color: var(--text); font-weight: 700; }
+  .prow.hit.sel .cell { background: var(--surface-2); color: var(--text); }
+  .prow.hit.sel .cell .m { color: var(--accent); }
+  .prow.hit.sel .cell .meta { color: var(--text-2); }
+  .prow.foot .cell { color: var(--muted); gap: 2ch; }
+  .prow.foot kbd { font: inherit; color: var(--text-2); }
+  .prow.foot .cell .right { margin-left: auto; color: var(--muted); }
+  .prow:focus-visible, .prite:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+  .player { background: var(--surface); display: grid; grid-template-rows: 1lh 1lh; padding: 0 1ch; white-space: nowrap; }
+  .player .p-top { display: grid; grid-template-columns: 40ch 1fr 22ch; align-items: baseline; }
+  .player .p-bot { display: grid; grid-template-columns: 40ch 1fr 40ch; align-items: baseline; color: var(--text-2); }
+  .player .p-bot > span:nth-child(2) { padding-left: 2ch; }
+  .player .title { font-weight: 700; color: var(--text); }
+  .bar .done { color: var(--accent); }
+  .bar .knob { color: var(--text); }
+  .vol .fill, .controls .fill { color: var(--live); }
+  .controls { display: flex; gap: 2ch; margin-left: auto; }
+  .dev .g { color: var(--live); }
+
+  .status { display: flex; align-items: center; gap: 3ch; padding: 0 1ch; color: var(--muted); white-space: nowrap; border-top: 1px solid var(--border); }
+  .status kbd { font: inherit; color: var(--text-2); }
+  .status .right { margin-left: auto; display: flex; gap: 3ch; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="term">
+
+  <header class="topbar">
+    <span class="brand">spotify</span>
+    <span class="right">
+      <span class="dim">nahuel</span>
+      <span class="dim">premium</span>
+    </span>
+  </header>
+
+  <div class="rule" aria-hidden="true">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <div class="behind" aria-hidden="true">
+    <div class="bhead"><span class="name">Bebop Essentials</span><span>nahuel · playlist</span><span class="right">42 tracks · 2h 51m</span></div>
+    <div class="bring"><span class="n">▶</span><span>So What</span><span>Miles Davis</span><span class="len">9:22</span></div>
+    <div class="bring"><span class="n">2</span><span>Moanin'</span><span>Art Blakey</span><span class="len">9:34</span></div>
+    <div class="bring"><span class="n">3</span><span>Giant Steps</span><span>John Coltrane</span><span class="len">4:46</span></div>
+    <div class="bring"><span class="n">4</span><span>'Round Midnight</span><span>Thelonious Monk</span><span class="len">6:38</span></div>
+    <div class="bring"><span class="n">5</span><span>Blue in Green</span><span>Miles Davis</span><span class="len">5:38</span></div>
+    <div class="bring"><span class="n">6</span><span>Chega de Saudade</span><span>João Gilberto</span><span class="len">2:02</span></div>
+    <div class="bring"><span class="n">7</span><span>Bemsha Swing</span><span>Thelonious Monk</span><span class="len">7:41</span></div>
+    <div class="bring"><span class="n">8</span><span>A Night in Tunisia</span><span>Dizzy Gillespie</span><span class="len">3:06</span></div>
+    <div class="bring"><span class="n">9</span><span>Freddie Freeloader</span><span>Miles Davis</span><span class="len">9:47</span></div>
+    <div class="bring"><span class="n">10</span><span>Misterioso</span><span>Thelonious Monk</span><span class="len">9:21</span></div>
+    <div class="bring"><span class="n">11</span><span>Naima</span><span>John Coltrane</span><span class="len">4:21</span></div>
+    <div class="bring"><span class="n">12</span><span>Desafinado</span><span>Stan Getz</span><span class="len">5:49</span></div>
+    <div class="bring"><span class="n">13</span><span>All Blues</span><span>Miles Davis</span><span class="len">11:33</span></div>
+    <div class="bring"><span class="n">14</span><span>Take Five</span><span>Dave Brubeck</span><span class="len">5:24</span></div>
+    <div class="bring"><span class="n">15</span><span>Straight, No Chaser</span><span>Thelonious Monk</span><span class="len">8:03</span></div>
+    <div class="bring"><span class="n">16</span><span>Flamenco Sketches</span><span>Miles Davis</span><span class="len">9:26</span></div>
+    <div class="bring"><span class="n">17</span><span>Confirmation</span><span>Charlie Parker</span><span class="len">3:00</span></div>
+    <div class="bring"><span class="n">18</span><span>Ornithology</span><span>Charlie Parker</span><span class="len">3:01</span></div>
+    <div class="bring"><span class="n">19</span><span>Anthropology</span><span>Charlie Parker</span><span class="len">3:12</span></div>
+    <div class="bring"><span class="n">20</span><span>Donna Lee</span><span>Charlie Parker</span><span class="len">2:34</span></div>
+    <div class="bring"><span class="n">21</span><span>Ko-Ko</span><span>Charlie Parker</span><span class="len">2:56</span></div>
+    <div class="bring"><span class="n">22</span><span>Salt Peanuts</span><span>Dizzy Gillespie</span><span class="len">3:17</span></div>
+    <div class="bring"><span class="n">23</span><span>Groovin' High</span><span>Dizzy Gillespie</span><span class="len">2:41</span></div>
+    <div class="bring"><span class="n">24</span><span>Hot House</span><span>Dizzy Gillespie</span><span class="len">3:08</span></div>
+    <div class="bring"><span class="n">25</span><span>Blue Monk</span><span>Thelonious Monk</span><span class="len">7:37</span></div>
+    <div class="bring"><span class="n">26</span><span>Epistrophy</span><span>Thelonious Monk</span><span class="len">3:14</span></div>
+    <div class="bring"><span class="n">27</span><span>Well, You Needn't</span><span>Thelonious Monk</span><span class="len">3:22</span></div>
+    <div class="bring"><span class="n">28</span><span>Ruby, My Dear</span><span>Thelonious Monk</span><span class="len">6:20</span></div>
+    <div class="bring"><span class="n">29</span><span>Four on Six</span><span>Wes Montgomery</span><span class="len">6:09</span></div>
+    <div class="bring"><span class="n">30</span><span>West Coast Blues</span><span>Wes Montgomery</span><span class="len">7:24</span></div>
+    <div class="bring"><span class="n">31</span><span>Song for My Father</span><span>Horace Silver</span><span class="len">7:17</span></div>
+    <div class="bring"><span class="n">32</span><span>Moanin' (alt take)</span><span>Art Blakey</span><span class="len">9:47</span></div>
+    <div class="bring"><span class="n">33</span><span>Cool Struttin'</span><span>Sonny Clark</span><span class="len">9:27</span></div>
+    <div class="bring"><span class="n">34</span><span>Blues Walk</span><span>Lou Donaldson</span><span class="len">6:23</span></div>
+    <div class="bring"><span class="n">35</span><span>Watermelon Man</span><span>Herbie Hancock</span><span class="len">7:09</span></div>
+    <div class="bring"><span class="n">36</span><span>Cantaloupe Island</span><span>Herbie Hancock</span><span class="len">5:29</span></div>
+    <div class="bring"><span class="n">37</span><span>Maiden Voyage</span><span>Herbie Hancock</span><span class="len">7:53</span></div>
+    <div class="bring"><span class="n">38</span><span>Footprints</span><span>Wayne Shorter</span><span class="len">7:30</span></div>
+    <div class="bring"><span class="n">39</span><span>Speak No Evil</span><span>Wayne Shorter</span><span class="len">8:22</span></div>
+    <div class="bring"><span class="n">40</span><span>Yes or No</span><span>Wayne Shorter</span><span class="len">6:36</span></div>
+  </div>
+
+  <section class="palette" aria-label="Command palette">
+    <div class="pline" aria-hidden="true"><span>┌</span><span class="dash">───────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span><span>┐</span></div>
+
+    <div class="prow head"><span class="edge" aria-hidden="true">│</span><span class="cell">command<span class="meta">esc close · ? all keys</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow sep"><span class="edge" aria-hidden="true">│</span><span class="cell"><span class="fill">────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow input"><span class="edge" aria-hidden="true">│</span><span class="cell"><span class="prompt" aria-hidden="true">&gt;</span><span>play so wha</span><span class="cursor" aria-hidden="true">&#160;</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow sep"><span class="edge" aria-hidden="true">│</span><span class="cell"><span class="fill">────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow sect"><span class="edge" aria-hidden="true">│</span><span class="cell">tracks<span class="dim">3</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow hit"><span class="edge" aria-hidden="true">│</span><span class="cell"><span><span class="m">So Wha</span>t</span><span class="meta">Miles Davis · Kind of Blue · 9:22</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow hit sel"><span class="edge" aria-hidden="true">│</span><span class="cell"><span><span class="m">So Wha</span>t — Live at Newport</span><span class="meta">Miles Davis · At Newport 1958 · 8:51</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow hit"><span class="edge" aria-hidden="true">│</span><span class="cell"><span><span class="m">So Wha</span>t (rehearsal)</span><span class="meta">Miles Davis · outtake · 9:04</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow sect"><span class="edge" aria-hidden="true">│</span><span class="cell">albums<span class="dim">1</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow hit"><span class="edge" aria-hidden="true">│</span><span class="cell"><span>Kind of Blue</span><span class="meta">Miles Davis · 1959 · 5 tracks · current</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow sect"><span class="edge" aria-hidden="true">│</span><span class="cell">playlists<span class="dim">2</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow hit"><span class="edge" aria-hidden="true">│</span><span class="cell"><span>Bebop Essentials</span><span class="meta">42 tracks · you</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow hit"><span class="edge" aria-hidden="true">│</span><span class="cell"><span>Late Night Jazz</span><span class="meta">published by Spotify · 120 tracks</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow sep"><span class="edge" aria-hidden="true">│</span><span class="cell"><span class="fill">────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="prow foot"><span class="edge" aria-hidden="true">│</span><span class="cell"><kbd>enter</kbd> play <kbd>ctrl+a</kbd> queue <kbd>ctrl+k</kbd> preview <kbd>tab</kbd> scope: all<span class="right">7 results</span></span><span class="edge" aria-hidden="true">│</span></div>
+
+    <div class="pline" aria-hidden="true"><span>└</span><span class="dash">───────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span><span>┘</span></div>
+  </section>
+
+  <div class="rule" aria-hidden="true">─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+
+  <footer class="player">
+    <div class="p-top">
+      <span><span class="live" aria-hidden="true">▶</span> <span class="title">So What</span></span>
+      <span class="sec">Miles Davis — Kind of Blue · 1959</span>
+      <span class="dev" style="text-align:right"><span class="g" aria-hidden="true">▸</span> Living Room</span>
+    </div>
+    <div class="p-bot">
+      <span class="bar"><span>0:42</span> <span class="done" aria-hidden="true">━━━━━</span><span class="knob" aria-hidden="true">●</span><span aria-hidden="true">──────────────────────</span> 9:22</span>
+      <span class="vol"><span class="dim">shuffle</span> off <span class="dim">·</span> <span class="dim">repeat</span> playlist</span>
+      <span class="controls"><span class="dim">vol</span> <span class="fill" aria-hidden="true">███████</span><span class="dim" aria-hidden="true">░░░</span> 72%</span>
+    </div>
+  </footer>
+
+  <footer class="status">
+    <span><kbd>space</kbd> pause</span>
+    <span><kbd>n</kbd><kbd>p</kbd> track</span>
+    <span><kbd>+</kbd><kbd>−</kbd> vol</span>
+    <span><kbd>:</kbd> command</span>
+    <span><kbd>/</kbd> filter</span>
+    <span><kbd>d</kbd> device</span>
+    <span class="right"><span>album view</span><span>12:04</span></span>
+  </footer>
+
+</div>
+</body>
+</html>
