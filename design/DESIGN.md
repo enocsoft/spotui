@@ -3,16 +3,16 @@ product: spotify-tui (working name)
 colors:
   canvas: theme.canvas # list body, palette body
   rail: theme.rail # left library rail, right queue rail, playing row tint
-  surface: theme.surface # selected row, player bar, palette, device picker
+  surface: theme.surface # selected row, player bar, palette, output picker
   text:
     primary: theme.text # titles, current row, now playing title
     secondary: theme.text-2 # table values, unselected titles, rail items
     muted: theme.muted # labels, numbers, durations, hints, inactive background
   accent: theme.accent # selection, focus, cursor, progress done, "you" markers
   state:
-    live: theme.live # playing glyph, active device dot, volume fill
+    live: theme.live # playing glyph, active output dot, volume fill
     warning: theme.warn # region lock, degraded session
-    error: theme.error # auth failure, unreachable device
+    error: theme.error # auth failure, dead output
     info: theme.info # sync and rate-limit notices
   border: theme.border # pane rules, box-drawing edges, separators
 roles:
@@ -56,15 +56,15 @@ widths:
 
 ## 1. Overview
 
-A terminal client for a **Spotify Premium** account that **plays remotely** through Spotify Connect: the audio comes out of whatever device is active (phone, speaker, another machine), and this app is the remote control. No local audio engine in v1.
+A player for a **Spotify Premium** account that runs **locally**: the audio comes out of this machine through an embedded Spotify session, and this app *is* the player. No Spotify app, no phone, no second device.
 
 Users: people who live in a terminal and do not want to switch context to a browser or a phone to put on a track. They already know `lazygit`, `k9s` or `lazydocker`.
 
-Jobs, in order: **search any track and play it**, **browse albums, playlists and liked songs**, **manage the queue and pick the output device**. The north-star metaphor is **a file browser for your music library**: one full-screen list, a table, a queue drawer, a status bar, keys you learn once.
+Jobs, in order: **search any track and play it**, **browse albums, playlists and liked songs**, **manage the queue and pick the local audio output**. The north-star metaphor is **a file browser for your music library**: one full-screen list, a table, a queue drawer, a status bar, keys you learn once.
 
 Keyboard model: `k9s`/`lazygit` — no modal editing, no `normal`/`insert`, no count prefixes. Single keys act on the focused row, `/` filters the current list, `:` opens a command palette, `?` shows every key. Every action is also reachable from `:`, so nothing is keyboard-only folklore.
 
-**The Remote Rule.** Playback state is owned by Spotify, not by this app. The UI always shows the *reported* device and state, and frames actions as requests: `no active device` is a first-class state with its own key, not an error.
+**The Local Player Rule.** This app *is* the player: the audio comes out of this machine, through an embedded Spotify session, so no Spotify app and no second device is involved. Controls act locally and immediately; the failure that matters is the output, so `no audio output · d` is a state with its own key, not an error.
 
 **The One Screen Rule.** One list owns the terminal. `tab` and `1`–`4` swap the whole screen to another view; nothing is ever split into side-by-side panes in v1, because a 100-column list loses the album column it needs. `enter` acts on the row under the cursor.
 
@@ -74,9 +74,9 @@ Roles only; the concrete values live in the theme file, and the default theme (t
 
 - **Canvas** — list bodies and the palette body. The default reading surface.
 - **Rail** — the queue drawer band and the tint behind the playing row. A second neutral, slightly lighter than canvas, used as a horizontal band, never as a column.
-- **Surface** — the selected row, the player bar, palette chrome, device picker. Use for *state*, never for decoration.
+- **Surface** — the selected row, the player bar, palette chrome, output picker. Use for *state*, never for decoration.
 - **Accent** — selection, focus, terminal cursor in the palette input, the completed part of the progress track, and markers that mean "yours" (`you` in playlist metadata).
-- **Live** — the playing glyph, the active-device dot, the volume fill. The only green in the screen.
+- **Live** — the playing glyph, the active-output dot, the volume fill. The only green in the screen.
 - **Muted** — labels, row numbers, durations, hints, inactive background content. Minimum 4.5:1 against every surface it lands on; if a muted value cannot hold that contrast, demote the information by *placement*, not by making it dimmer.
 
 **The Single Accent Rule.** One accent hue, and it only means action, selection or live state. Never color a row, a header and a border in the same frame; if two things need emphasis, one is wrong.
@@ -96,17 +96,17 @@ Four roles, applied identically across panes. There is no font size hierarchy in
 
 **The Same-Role Rule.** A role looks the same in every pane. A muted duration in the track table is the same muted duration in the queue; if the queue needs a different treatment, that is a different role, named in the frontmatter.
 
-**The No-Caps Rule.** Section headers are uppercase only when they are structural (`QUEUE`, `DEVICES`); track, album and artist text keeps its real casing, and body copy is never letter-spaced.
+**The No-Caps Rule.** Section headers are uppercase only when they are structural (`QUEUE`, `OUTPUT`); track, album and artist text keeps its real casing, and body copy is never letter-spaced.
 
 ## 4. Layout
 
 At 180×50: one full-screen list, a one-row context strip, a queue drawer of 8 rows, two rows for the player and one for the status bar.
 
-- **Top bar** — brand, then the three sections as `│` cells: `│ Library │ Search │ Queue`. The active section sits on `surface`, bold; the rest stay muted. A playlist, album or artist opened inside Library keeps `Library` active and is named in the context strip; `d` and `:` are keys, so devices and the palette never take a cell. Account on the far right. Never device state.
+- **Top bar** — brand, then the three sections as `│` cells: `│ Library │ Search │ Queue`. The active section sits on `surface`, bold; the rest stay muted. A playlist, album or artist opened inside Library keeps `Library` active and is named in the context strip; `d` and `:` are keys, so outputs and the palette never take a cell. Account on the far right. Never output state.
 - **Context strip** — one row: where you are (`playlists / Bebop Essentials`), owner and privacy, then track count, total time and the current sort. The only place those facts appear.
 - **List** — owns every column the terminal has, minus 2 cells of inset. A view is one list: library, album, playlist, search results, queue.
 - **Queue drawer** — 8 rows above the player, toggled with `q`, tinted with `rail` and closed by one `─` rule. It shows *up next only*: the current track already lives in the player bar.
-- **Player bar** — always two rows at ≥140 columns: row 1 = state glyph, title, artist/album/year, device and bitrate; row 2 = progress track with times, shuffle/repeat mode, volume. At 80 columns it collapses to one row and drops the times, keeping the progress track.
+- **Player bar** — always two rows at ≥140 columns: row 1 = state glyph, title, artist/album/year, audio output and bitrate; row 2 = progress track with times, shuffle/repeat mode, volume. At 80 columns it collapses to one row and drops the times, keeping the progress track.
 - **Status bar** — one row, fixed at the bottom, contextual keys on the left in the order you need them, view state and clock on the right, separated by 3-cell gaps.
 
 Breakpoints, keyed on terminal columns:
@@ -120,7 +120,7 @@ Breakpoints, keyed on terminal columns:
 
 **The Sections-Only Rule.** The title row carries the sections you return to — Library, Search, Queue — three cells, not a menu. Drill-downs are named in the context strip, and anything reachable with one key (`d`, `:`, `?`, `l`) never becomes a cell. A fourth section is a product decision, and it extends sideways: the row never grows a second line and never becomes a sidebar (`… n` plus `H`/`L` when it overflows).
 
-**The One Rule Row Rule.** Regions are separated by a single 1-cell rule — above the drawer, above the player, above the status bar — never by gaps plus frames. Box-drawing is reserved for two things: the palette and the device picker, the only floating, independently scrolling regions on screen.
+**The One Rule Row Rule.** Regions are separated by a single 1-cell rule — above the drawer, above the player, above the status bar — never by gaps plus frames. Box-drawing is reserved for two things: the palette and the audio output picker, the only floating, independently scrolling regions on screen.
 
 ## 5. Surfaces
 
@@ -137,8 +137,8 @@ One geometric family, one meaning each. No emoji, no icon fonts, no ASCII art.
 | Glyph | Meaning |
 | --- | --- |
 | `▶` | now playing (replaces the row number) |
-| `●` | active: connected device, live session |
-| `○` | idle device, unselected |
+| `●` | active: selected audio output, live player |
+| `○` | idle output, unselected |
 | `▸` / `▾` | collapsed / expanded section, and the selected rail node |
 | `[x]` / `[ ]` | saved to your library / not saved; `[ ]` plus `region lock` when it cannot be saved |
 | `·` | divider inside meta lines |
@@ -146,7 +146,7 @@ One geometric family, one meaning each. No emoji, no icon fonts, no ASCII art.
 | `─` | rule, and the remaining part of the progress track |
 | `━` + `●` | progress elapsed, and the playhead |
 | `…` | truncation marker; lists truncate, they never wrap |
-| `✓` / `✗` | command results in the palette (`:device` success, auth failure) |
+| `✓` / `✗` | command results in the palette (`:output` success, auth failure) |
 
 **The Measured Glyph Rule.** Every glyph used in chrome is single-width; emoji and CJK never enter the layout, and every row is padded with `width`-aware truncation so nothing overflows its column budget.
 
@@ -158,17 +158,17 @@ One geometric family, one meaning each. No emoji, no icon fonts, no ASCII art.
 
 **Queue drawer** — `▾ QUEUE  up next 8 of 41` on the band header, then eight rows of what plays next with artist and duration; the current track is *not* repeated because the player bar owns it. Reorder with `J`/`K`; removing the current track asks nothing and skips forward. At 80 columns the drawer is not rendered and the queue becomes view `4`.
 
-**Player bar** — described in Layout. States: playing, paused (`‖` glyph, progress frozen, live color leaves the title), no active device (`○ no active device · d to pick` replaces the device segment, controls stay enabled because they start a session), buffering (`◐` in the glyph cell, title unaffected), auth expired (`✗ session expired · :login`), offline (device segment says `offline`, queue commands disabled with a reason on the row).
+**Player bar** — described in Layout. States: playing, paused (`‖` glyph, progress frozen, live color leaves the title), no audio output (`○ no output · d to pick` replaces the output segment), buffering (`◐` in the glyph cell, title unaffected), auth expired (`✗ session expired · :login`), device asleep (output segment says `no output`; queue commands still work, they only touch the queue).
 
-**Command palette** — 104 columns wide, 14 rows down, drawn with a closed edge, one tinted surface. Rows: `⋮` header (`command` + `esc close · ? all keys`), a `─` separator, the input line with an accent `>` prompt and an accent block cursor, then type-grouped results (`tracks 3`, `albums 1`, `playlists 2`) with the matched substring bold and metadata right-aligned, then a separator and a key footer with the result count. States: empty query (`recent`, `:help`, `:queue`, `:device`), no results (`○ nothing matches · tab widens the scope`), long lists scroll with `ctrl+j`/`ctrl+k`, prefix commands complete inline (`:pla` → `:play`).
+**Command palette** — 104 columns wide, 14 rows down, drawn with a closed edge, one tinted surface. Rows: `⋮` header (`command` + `esc close · ? all keys`), a `─` separator, the input line with an accent `>` prompt and an accent block cursor, then type-grouped results (`tracks 3`, `albums 1`, `playlists 2`) with the matched substring bold and metadata right-aligned, then a separator and a key footer with the result count. States: empty query (`recent`, `:help`, `:queue`, `:output`), no results (`○ nothing matches · tab widens the scope`), long lists scroll with `ctrl+j`/`ctrl+k`, prefix commands complete inline (`:pla` → `:play`).
 
-**Device picker** — 60 columns, closed edge, list of Connect devices: `● Living Room · Spotify Connect · active`, `○ Pixel 8 · idle`. Blocked reason inline when a device is unavailable (`○ Studio · needs the app open`).
+**Audio output picker** — 60 columns, closed edge, list of local sinks: `● Speakers · PipeWire · active`, `○ HDMI / DisplayPort`, `○ JACK`. Blocked reason inline (`○ Bluetooth headset · not connected`). There is no Spotify device list: the player runs here, and picking a sink moves the sound, not the session.
 
-**Global states** — `no active device` (with `d`), `premium required` (explains the limitation and stops offering playback keys), `rate limited · retrying in 3s` (muted, live spinner only while a retry is genuinely in flight), `empty queue` (`○ queue is empty · enter plays from this list`).
+**Global states** — `player starting…` (brief, at launch), `no audio output · d`, `premium required` (explains the limitation and stops offering playback keys), `rate limited · retrying in 3s` (muted, live spinner only while a retry is genuinely in flight), `empty queue` (`○ queue is empty · enter plays from this list`).
 
 ## 8. Do's and Don'ts
 
-**The One Fact Rule.** Each fact appears once per screen. Device and bitrate live in the player bar only; track count, total time and sort in the context strip only; the now-playing title never repeats in the queue drawer.
+**The One Fact Rule.** Each fact appears once per screen. Audio output and bitrate live in the player bar only; track count, total time and sort in the context strip only; the now-playing title never repeats in the queue drawer.
 
 **The Mirror Rule.** Progress and volume are read-only mirrors of the reported session. A local keypress shows as pending (dimmed knob or `…` for up to one second), then either lands or reverts with a one-line toast; the UI never advances progress optimistically.
 
@@ -182,7 +182,7 @@ Do:
 - right-align every number and keep durations at a stable width.
 - truncate long titles with `…` and put the full value in the inspector (`i`), never wrap.
 - keep one accent, one live color, one border color.
-- explain unavailable actions in place: `enter · premium required`, `d · no Connect device found`.
+- explain unavailable actions in place: `enter · premium required`, `d · no audio output found`.
 
 Don't:
 
