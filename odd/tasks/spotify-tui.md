@@ -25,6 +25,9 @@ S15. Implementación del playback: **`github.com/elxgy/go-librespot`** (fork de 
 S16. Control local, no remoto: `space`/`n`/`p`/volumen hablan con el player en proceso; no hay transferencia a dispositivo ni `NO_ACTIVE_DEVICE`. La salida de audio es un **sink local** y `d` abre el selector de salidas, no una lista de dispositivos Spotify. (L8)
 S17. Alcance no oficial, declarado: un cliente librespot no es una integración oficial de Spotify y se mueve en la misma zona gris que ncspot/spotifyd (que el usuario tomó como referencia). El README lo dice explícitamente y el proyecto es de uso personal, no comercial. (L8)
 
+S18. Vistas persistentes = sólo dos: **Tracks** (la lista abierta: playlist, álbum o resultado) y **Playlists** (navegación). Textual: «que las view sean tracks playlist». (L13)
+S19. Search, el palette de comandos, el selector de salida y la ayuda son **ventanas flotantes**: borde cerrado en `surface`, una a la vez, abiertas por su tecla y cerradas con `esc`, sin cambiar la fila de secciones ni la franja de contexto. Textual: «queque search y eso sean ventanas flotantess como en enn canva». (L13)
+
 ## Tasks
 
 | ID | Qué | Specs | Ruta | Commit |
@@ -39,6 +42,7 @@ S17. Alcance no oficial, declarado: un cliente librespot no es una integración 
 | T9 | Integrar `go-librespot` embebido: sesión, auth único, login y arranque del player desde `cmd/spotify-tui`; medir CGO y backends disponibles en esta máquina | S1, S15, S17 | pendiente | — |
 | T10 | Reemplazar el picker de dispositivos por selector de salida de audio local y los estados del player por estados del reproductor propio | S16 | pendiente (abre T4/T5) | — |
 | T8 | Estados de restricción en la UI: playlist sin items (no sos owner), búsqueda paginada de a 10, campos ausentes (`popularity`, `followers`) leídos como opcionales | S14 | pendiente | — |
+| T12 | Ventanas flotantes reales: search, palette, output picker y ayuda con borde cerrado y centrado, en vez de renderizar en el lugar de la lista | S19 | pendiente (espera T11) | — |
 
 ## Log
 
@@ -73,3 +77,5 @@ L10 (nota de proceso): dos commits de docs anteriores se hicieron con `git add -
 L11 (resultado del spike T9, verificado): `go build` con CGO compila y ejecuta contra `devgianlu/go-librespot@v0.10.5` y contra `elxgy/go-librespot@v0.0.0-20261006151337-a818cdb1bc54`. El upstream **no** expone un paquete de arranque importable (el wiring vive en `cmd/daemon`, package main); el fork sí aporta `sessionconfig`, que es exactamente ese pegamento. Decisión: dependemos del fork, con la pseudo-version fijada y revisada (el fork no publica tags, así que `@latest` sería un riesgo de suministro: se pinea el commit). Entorno: `CGO_ENABLED=1`, gcc y pkg-config presentes; alsa, libpulse y libpipewire-0.3 instaladas; PipeWire corriendo con pipewire-pulse y dos sinks (HDMI y analógico). El spike vive en `spike/` y está ignorado por git. Pendiente para cerrar T9 del todo: prueba de sonido real con la cuenta del usuario (requiere su login), que es un paso de ejecución, no de compilación.
 
 L12 (slice 1 entregado y verificado por el padre):T1–T6 commiteados en dos unidades que compilan por separado — `b79512c` dominio (config XDG, theme desde DESIGN.md, interfaces + mock) y `6d7c154` shell de TUI (fila de secciones, franja, lista full-screen, drawer de cola, player bar de 2 filas, status bar, keymap k9s, picker de salida). Verificación propia, no del reporte del worker: `gofmt -l` sin salida, `go vet ./...` exit 0, `go test -count=1 ./...` exit 0 (13 tests), `go build ./...` exit 0. Además miré la TUI renderizada en tmux: 180x50 → 50 líneas de 180 columnas, sin desbordes; 80x24 → 24 líneas de 80; drawer abre con `q` (`▾ QUEUE up next 8 of 41`); player bar colapsa a una fila bajo 100 columnas. Correcciones del padre sobre el reporte del worker: el config exponía una opción `device` ("preferred Connect device name") y el status bar decía `d device`; ambos pasaron a `output` / `d output`, con el test del config actualizado.
+
+L13 (ajuste de diseño pedido, verbatim): «aria arreglos primero que las view sean tracks playlist queque search yque eso sean ventanas flotantess como en enn canva». Consecuencia: S18 y S19 agregadas; la fila de secciones queda en `Tracks │ Playlists`; Search deja de ser celda y pasa a ventana flotante junto con `:`, `d` y `?`. Board 01 y DESIGN.md actualizados; el código se aplica después de T11 (T12) para no tener dos escritores sobre `internal/app/`.

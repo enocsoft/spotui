@@ -102,7 +102,7 @@ Four roles, applied identically across panes. There is no font size hierarchy in
 
 At 180×50: one full-screen list, a one-row context strip, a queue drawer of 8 rows, two rows for the player and one for the status bar.
 
-- **Top bar** — brand, then the three sections as `│` cells: `│ Library │ Search │ Queue`. The active section sits on `surface`, bold; the rest stay muted. A playlist, album or artist opened inside Library keeps `Library` active and is named in the context strip; `d` and `:` are keys, so outputs and the palette never take a cell. Account on the far right. Never output state.
+- **Top bar** — brand, then the **two** sections as `│` cells: `│ Tracks │ Playlists`. The active section sits on `surface`, bold; the other stays muted. `Tracks` is whatever list is open (playlist, album, search result) and names it in the context strip; `Playlists` is the browse view. Search, the palette, the output picker and help are **floating windows**, not sections, so they never take a cell. Account on the far right. Never output state.
 - **Context strip** — one row: where you are (`playlists / Bebop Essentials`), owner and privacy, then track count, total time and the current sort. The only place those facts appear.
 - **List** — owns every column the terminal has, minus 2 cells of inset. A view is one list: library, album, playlist, search results, queue.
 - **Queue drawer** — 8 rows above the player, toggled with `q`, tinted with `rail` and closed by one `─` rule. It shows *up next only*: the current track already lives in the player bar.
@@ -118,7 +118,7 @@ Breakpoints, keyed on terminal columns:
 | 80–99 | full list, drawer becomes a full view (`4`), player collapses to one row |
 | < 80 | refuse to render the list, print the minimum size and the view keys |
 
-**The Sections-Only Rule.** The title row carries the sections you return to — Library, Search, Queue — three cells, not a menu. Drill-downs are named in the context strip, and anything reachable with one key (`d`, `:`, `?`, `l`) never becomes a cell. A fourth section is a product decision, and it extends sideways: the row never grows a second line and never becomes a sidebar (`… n` plus `H`/`L` when it overflows).
+**The Sections-Only Rule.** The title row carries the places you return to — `Tracks` and `Playlists`, two cells, not a menu. Search is a window you open and close, not a place you are; so are the palette (`:`), the output picker (`d`) and help (`?`). Anything that is transient belongs to a floating window, and adding a section is a product decision that has to earn a permanent cell. The row never grows a second line and extends sideways if a third section is ever justified.
 
 **The One Rule Row Rule.** Regions are separated by a single 1-cell rule — above the drawer, above the player, above the status bar — never by gaps plus frames. Box-drawing is reserved for two things: the palette and the audio output picker, the only floating, independently scrolling regions on screen.
 
@@ -160,7 +160,9 @@ One geometric family, one meaning each. No emoji, no icon fonts, no ASCII art.
 
 **Player bar** — described in Layout. States: playing, paused (`‖` glyph, progress frozen, live color leaves the title), no audio output (`○ no output · d to pick` replaces the output segment), buffering (`◐` in the glyph cell, title unaffected), auth expired (`✗ session expired · :login`), device asleep (output segment says `no output`; queue commands still work, they only touch the queue).
 
-**Command palette** — 104 columns wide, 14 rows down, drawn with a closed edge, one tinted surface. Rows: `⋮` header (`command` + `esc close · ? all keys`), a `─` separator, the input line with an accent `>` prompt and an accent block cursor, then type-grouped results (`tracks 3`, `albums 1`, `playlists 2`) with the matched substring bold and metadata right-aligned, then a separator and a key footer with the result count. States: empty query (`recent`, `:help`, `:queue`, `:output`), no results (`○ nothing matches · tab widens the scope`), long lists scroll with `ctrl+j`/`ctrl+k`, prefix commands complete inline (`:pla` → `:play`).
+**Floating windows** — search (`/`), the command palette (`:`) and the output picker (`d`) share one component: a closed `┌─┐ │ └─┘` edge in `border` on `surface`, centred over the list, opened by its own key and closed with `esc`. One at a time; the section row and the context strip never change while one is open, because a window is not a place. The list behind stays put and does not scroll. The window sizes to its content, never to the screen, and long result sets scroll inside it.
+
+**Search and palette window** — the same panel in two modes: `/` searches, `:` takes commands. 104 columns wide, 14 rows down. Rows: `⋮` header (`command` + `esc close · ? all keys`), a `─` separator, the input line with an accent `>` prompt and an accent block cursor, then type-grouped results (`tracks 3`, `albums 1`, `playlists 2`) with the matched substring bold and metadata right-aligned, then a separator and a key footer with the result count. States: empty query (`recent`, `:help`, `:queue`, `:output`), no results (`○ nothing matches · tab widens the scope`), long lists scroll with `ctrl+j`/`ctrl+k`, prefix commands complete inline (`:pla` → `:play`).
 
 **Audio output picker** — 60 columns, closed edge, list of local sinks: `● Speakers · PipeWire · active`, `○ HDMI / DisplayPort`, `○ JACK`. Blocked reason inline (`○ Bluetooth headset · not connected`). There is no Spotify device list: the player runs here, and picking a sink moves the sound, not the session.
 
