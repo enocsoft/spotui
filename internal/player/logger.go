@@ -49,14 +49,14 @@ func (l *captureLogger) writef(format string, args ...any) {
 	fmt.Fprintf(l.w, "spotify-tui: %s\n", msg)
 }
 
-func (l *captureLogger) Tracef(format string, args ...any) {}
-func (l *captureLogger) Debugf(format string, args ...any) {}
+func (l *captureLogger) Tracef(format string, args ...any) { l.writef("trace: "+format, args...) }
+func (l *captureLogger) Debugf(format string, args ...any) { l.writef(format, args...) }
 func (l *captureLogger) Infof(format string, args ...any)  { l.writef(format, args...) }
 func (l *captureLogger) Warnf(format string, args ...any)  { l.writef("warning: "+format, args...) }
 func (l *captureLogger) Errorf(format string, args ...any) { l.writef(format, args...) }
 
-func (l *captureLogger) Trace(args ...any) {}
-func (l *captureLogger) Debug(args ...any) {}
+func (l *captureLogger) Trace(args ...any) { l.writef("trace: %v", args...) }
+func (l *captureLogger) Debug(args ...any) { l.writef("%v", args...) }
 func (l *captureLogger) Info(args ...any)  { l.writef("%v", args...) }
 func (l *captureLogger) Warn(args ...any)  { l.writef("warning: %v", args...) }
 func (l *captureLogger) Error(args ...any) { l.writef("%v", args...) }

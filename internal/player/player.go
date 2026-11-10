@@ -172,6 +172,14 @@ func (p *Player) run() {
 		p.fail(err)
 		return
 	}
+	// The token is in hand: leave the login screen now. Waiting for the profile
+	// call below kept the URL on screen with no sign of life, which reads as a
+	// dead app even though the login already succeeded.
+	p.mu.Lock()
+	p.loginURL = ""
+	p.mu.Unlock()
+	p.emit(library.Event{Type: library.EventConnecting})
+
 	// Freshly minted tokens carry no user id yet; a cached one does.
 	if tok.UserID == "" {
 		userID, err := p.authCfg.FetchUserID(p.baseCtx, tok.AccessToken)
@@ -186,19 +194,11 @@ func (p *Player) run() {
 		}
 	}
 
-	p.mu.Lock()
-	p.loginURL = ""
-	p.mu.Unlock()
-
 	// The dashboard client id is the right partner for a token our PKCE flow
 	// minted, but librespot still runs its own client-token exchange during
 	// bootstrap, and that exchange has rejected a dashboard client id with a
 	// bare 400 (L20). Do not guess which id the server wants today: try the
 	// configured one, fall back to librespot's default, report what failed.
-	// The token is in hand: say so, or the login screen keeps staring back while
-	// the session bootstrap negotiates.
-	p.emit(library.Event{Type: library.EventConnecting})
-
 	candidates := sessionClientIDs(p.opts.ClientID)
 	var sess *session.Session
 	var bootErr error
