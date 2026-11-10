@@ -356,7 +356,7 @@ func (m Model) playlistsRows() []row {
 // info rate-limit state instead (DESIGN global states).
 func (m Model) errorStatusRow(err error) row {
 	if library.IsRateLimited(err) {
-		return row{kind: rowStatus, st: stInfo, text: theme.GlyphIdle + " rate limited · the player is retrying"}
+		return row{kind: rowStatus, st: stInfo, text: theme.GlyphIdle + " rate limited · press r to retry"}
 	}
 	return row{kind: rowStatus, st: stError, text: "✗ could not load", hint: "r retry · " + err.Error()}
 }
