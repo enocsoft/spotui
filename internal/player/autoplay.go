@@ -47,5 +47,8 @@ func (p *Player) ResolveAutoplay(ctx context.Context, seedURI string, recent []s
 	if err != nil {
 		return nil, fmt.Errorf("resolving the radio context: %w", err)
 	}
-	return library.TracksFromContext(spotCtx), nil
+	tracks := library.TracksFromContext(spotCtx)
+	// Autoplay contexts carry the uri and nothing else: without the batch lookup
+	// the track plays while the player bar keeps the previous title.
+	return library.EnrichTracks(cctx, tracks, p.metadataBatch()), nil
 }

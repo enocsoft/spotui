@@ -236,3 +236,42 @@ func TracksFromContext(spotCtx *connectpb.Context) []Track {
 	}
 	return out
 }
+
+// EnrichTracks fills the names and durations a context did not carry, with one
+// batched lookup. Autoplay contexts come with the uri only, so without this the
+// track plays with an empty title in the player bar. Best effort: a batch failure
+// returns the tracks untouched.
+func EnrichTracks(ctx context.Context, tracks []Track, batch MetadataBatch) []Track {
+	if batch == nil || len(tracks) == 0 {
+		return tracks
+	}
+	need := make([]string, 0, len(tracks))
+	for _, t := range tracks {
+		if t.Title == "" || t.Artist == "" || t.Duration == 0 {
+			need = append(need, "spotify:track:"+t.ID)
+		}
+	}
+	if len(need) == 0 {
+		return tracks
+	}
+	resolved, err := batch(ctx, need)
+	if err != nil {
+		return tracks
+	}
+	for i := range tracks {
+		e, ok := resolved["spotify:track:"+tracks[i].ID]
+		if !ok {
+			continue
+		}
+		if tracks[i].Title == "" {
+			tracks[i].Title = e.Name
+		}
+		if tracks[i].Artist == "" {
+			tracks[i].Artist = e.Artist
+		}
+		if tracks[i].Duration == 0 {
+			tracks[i].Duration = timeFromMS(e.DurationMS)
+		}
+	}
+	return tracks
+}

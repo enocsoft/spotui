@@ -370,3 +370,39 @@ func TestAlbumItemsViaResolverErrorSurfacesTheReason(t *testing.T) {
 		t.Errorf("a failed resolve must not return rows, got %+v", page.Tracks)
 	}
 }
+
+// TestEnrichTracksFillsWhatTheContextLacks: autoplay contexts carry the uri and
+// nothing else, so without this the track plays with an empty title.
+func TestEnrichTracksFillsWhatTheContextLacks(t *testing.T) {
+	tracks := []Track{
+		{ID: "4uLU6hMCjMI75M1A2tKUQC"}, // nothing but the id
+		{ID: "0VjIjW4GlUZAMYd2vXMi3b", Title: "Known", Artist: "Someone", Duration: 90 * time.Second},
+	}
+	batch := func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error) {
+		if len(uris) != 1 || uris[0] != "spotify:track:4uLU6hMCjMI75M1A2tKUQC" {
+			t.Errorf("batch asked for %v, want only the entry missing names", uris)
+		}
+		return map[string]spclient.ResolvedEntry{
+			"spotify:track:4uLU6hMCjMI75M1A2tKUQC": {Name: "Never Gonna Give You Up", Artist: "Rick Astley", DurationMS: 213000},
+		}, nil
+	}
+	got := EnrichTracks(context.Background(), tracks, batch)
+	if got[0].Title != "Never Gonna Give You Up" || got[0].Artist != "Rick Astley" {
+		t.Errorf("the empty entry was not filled: %+v", got[0])
+	}
+	if got[1].Title != "Known" || got[1].Artist != "Someone" {
+		t.Errorf("an entry that already had names must not be touched: %+v", got[1])
+	}
+}
+
+// TestEnrichTracksIsBestEffort: a failing batch leaves the tracks as they came.
+func TestEnrichTracksIsBestEffort(t *testing.T) {
+	tracks := []Track{{ID: "4uLU6hMCjMI75M1A2tKUQC"}}
+	batch := func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error) {
+		return nil, errors.New("boom")
+	}
+	got := EnrichTracks(context.Background(), tracks, batch)
+	if len(got) != 1 || got[0].Title != "" {
+		t.Errorf("a batch failure must not change the tracks: %+v", got)
+	}
+}
