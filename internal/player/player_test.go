@@ -1,7 +1,9 @@
 package player
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	libplayer "github.com/elxgy/go-librespot/player"
@@ -152,5 +154,21 @@ func TestIsClientTokenRejection(t *testing.T) {
 	}
 	if isClientTokenRejection(nil) {
 		t.Errorf("nil must not be a rejection")
+	}
+}
+
+func TestLoggerRedactsSecrets(t *testing.T) {
+	var buf bytes.Buffer
+	l := &captureLogger{w: &buf}
+	l.Infof("obtained new client token: %s", "AAHQPSce8ZzZ4AT0cxABTXPNxJr6Dv/k994uXMc8Z/dod+ubpVbei90shAsaPq1CPby5KknzU3d9Z9BCHZry8mrNUvxcoWIfTaH/FmZYyZ")
+	got := buf.String()
+	if strings.Contains(got, "AAHQPSce8ZzZ") {
+		t.Errorf("the log leaked a client token: %s", got)
+	}
+	if !strings.Contains(got, "<redacted>") {
+		t.Errorf("expected a redaction marker, got: %s", got)
+	}
+	if !strings.Contains(got, "obtained new client token") {
+		t.Errorf("the message itself must survive redaction: %s", got)
 	}
 }

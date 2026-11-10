@@ -210,7 +210,10 @@ func (p *Player) run() {
 			CallbackPort: p.opts.CallbackPort,
 			DeviceType:   "computer",
 			ClientId:     clientID,
-			Credentials:  &session.SpotifyTokenCredentials{Username: tok.UserID, Token: tok.AccessToken},
+			// A value, not a pointer: the library type-switches on the concrete
+			// type, and *session.SpotifyTokenCredentials lands in the default case
+			// as "unknown credentials: *session.SpotifyTokenCredentials".
+			Credentials: session.SpotifyTokenCredentials{Username: tok.UserID, Token: tok.AccessToken},
 		})
 		cancel()
 		if bootErr == nil {

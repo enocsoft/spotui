@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	librespot "github.com/elxgy/go-librespot"
@@ -38,8 +39,14 @@ func newCaptureLogger(stateDir string, onLogin func(url string)) *captureLogger 
 	return &captureLogger{w: w, onLogin: onLogin}
 }
 
+// longSecret matches token-shaped runs. go-librespot logs whole client tokens and
+// access points at debug level; a debug log that leaks credentials is a liability,
+// and the authorization URL has its own file where it stays readable.
+var longSecret = regexp.MustCompile(`[A-Za-z0-9+/=_-]{40,}`)
+
 func (l *captureLogger) writef(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
+	msg = longSecret.ReplaceAllString(msg, "<redacted>")
 	if strings.HasPrefix(msg, loginLinkPrefix) && l.onLogin != nil {
 		l.onLogin(strings.TrimPrefix(msg, loginLinkPrefix))
 	}
