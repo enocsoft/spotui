@@ -643,3 +643,23 @@ func TestOpenKeyLaunchesTheBrowser(t *testing.T) {
 		t.Fatalf("opener was called outside the login screen: %v", opened)
 	}
 }
+
+// TestProgressBarIsDashed: the progress track is a run of hyphens, not the
+// heavy bar with a knob the design used before.
+func TestProgressBarIsDashed(t *testing.T) {
+	m := newModel(t, 180, 50)
+	for _, line := range lines(m) {
+		if !strings.Contains(line, "0:42") && !strings.Contains(line, "0:00") {
+			continue
+		}
+		if strings.Contains(line, "●") {
+			t.Errorf("the progress bar still draws a knob: %q", line)
+		}
+		if strings.Contains(line, "━") {
+			t.Errorf("the progress bar still draws the heavy line: %q", line)
+		}
+		if !strings.Contains(line, "-") {
+			t.Errorf("the progress bar should be a run of hyphens: %q", line)
+		}
+	}
+}

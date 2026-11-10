@@ -43,12 +43,12 @@ const (
 	GlyphTruncation = "…"   // truncation; lists truncate, never wrap
 	GlyphDivider    = "│"   // segment divider in bars and strips
 	GlyphRule       = "─"   // rule, progress remaining
-	GlyphProgress   = "━"   // progress elapsed
-	GlyphKnob       = "●"   // progress playhead
-	GlyphSortDesc   = "↓"   // sort indicator (artboard copy)
-	GlyphVolFill    = "█"   // volume fill (artboard)
-	GlyphVolEmpty   = "░"   // volume rest (artboard)
-	GlyphCrumb      = "/"   // crumb divider
+	GlyphProgress   = "-"   // progress track and elapsed, dashed
+
+	GlyphSortDesc = "↓" // sort indicator (artboard copy)
+	GlyphVolFill  = "█" // volume fill (artboard)
+	GlyphVolEmpty = "░" // volume rest (artboard)
+	GlyphCrumb    = "/" // crumb divider
 )
 
 // Type roles from design/DESIGN.md §3, as lipgloss styles.

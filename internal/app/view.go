@@ -806,7 +806,9 @@ func (m Model) albumOf() string {
 	return ""
 }
 
-// progressCell: elapsed ━··●─── total, inside the given cell budget.
+// progressCell: elapsed ---- total, inside the given cell budget. The elapsed
+// part is a run of hyphens in the accent role and the rest in the rule role; no
+// knob, so the bar reads as one continuous dashed line.
 func (m Model) progressCell(width int) string {
 	s := m.data.Session()
 	barW := width
@@ -823,13 +825,8 @@ func (m Model) progressCell(width int) string {
 	if done > barW {
 		done = barW
 	}
-	// the knob occupies one cell inside the track (DESIGN: ━ + ●)
-	if done > barW-1 {
-		done = barW - 1
-	}
 	bar := theme.AccentStyle.Render(strings.Repeat(theme.GlyphProgress, done)) +
-		theme.TitleStyle.Render(theme.GlyphKnob) +
-		theme.RuleStyle.Render(strings.Repeat(theme.GlyphRule, barW-done-1))
+		theme.RuleStyle.Render(strings.Repeat(theme.GlyphProgress, barW-done))
 	return theme.NumberStyle.Render(fmtDur(s.Elapsed)) + " " + bar + " " + theme.NumberStyle.Render(fmtDur(s.Total))
 }
 

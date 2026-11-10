@@ -36,8 +36,7 @@ glyphs:
   truncation: …
   divider: │
   rule: ─
-  progress-done: ━
-  progress-knob: ●
+  progress: "-"
 spacing:
   inset: 1 col
   rail-inset: 1 col
@@ -144,7 +143,7 @@ One geometric family, one meaning each. No emoji, no icon fonts, no ASCII art.
 | `·` | divider inside meta lines |
 | `│` | segment divider in bars and strips |
 | `─` | rule, and the remaining part of the progress track |
-| `━` + `●` | progress elapsed, and the playhead |
+| `-` | progress track, elapsed in the accent role and the rest in the rule role; no knob |
 | `…` | truncation marker; lists truncate, they never wrap |
 | `✓` / `✗` | command results in the palette (`:output` success, auth failure) |
 
