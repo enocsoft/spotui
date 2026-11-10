@@ -185,6 +185,85 @@ func TestWebAPIPlaylistsEmptyLibrary(t *testing.T) {
 	}
 }
 
+// --- GET /v1/me/albums (T23: saved albums as a browsable section) ---
+
+// The saved-albums object wraps the album one level down, and the year is
+// the front of release_date, never the full date.
+const svAlbumBlue = `{"album":{"id":"al1","name":"Kind of Blue","artists":[{"name":"Miles Davis"}],"release_date":"1959-08-17","total_tracks":5}}`
+const svAlbumVoyage = `{"album":{"id":"al2","name":"Maiden Voyage","artists":[{"name":"Herbie Hancock"}],"release_date":"1965","total_tracks":5}}`
+
+func TestWebAPISavedAlbumsFirstPageAndLazyNext(t *testing.T) {
+	page1 := `{"total":55,"offset":0,"next":"next","items":[` + svAlbumBlue + `]}`
+	page2 := `{"total":55,"offset":50,"next":null,"items":[` + svAlbumVoyage + `]}`
+	calls := 0
+	client, log := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
+		calls++
+		if r.URL.Path != "/v1/me/albums" {
+			t.Errorf("path = %q, want /v1/me/albums", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("limit"); got != "50" {
+			t.Errorf("limit = %q, want 50 (paging at 50 per page, like playlists)", got)
+		}
+		switch off := r.URL.Query().Get("offset"); off {
+		case "0":
+			return 200, page1
+		case "50":
+			return 200, page2
+		default:
+			t.Errorf("unexpected offset %q — the catalog must never prefetch everything", off)
+			return 400, `{}`
+		}
+	})
+	api := NewWebAPI(client)
+	first, err := api.SavedAlbums(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("SavedAlbums first page: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("after the first page the client made %d calls, want 1 (lazy paging)", calls)
+	}
+	log.want(t, "GET /v1/me/albums?limit=50&offset=0")
+	if len(first.Albums) != 1 {
+		t.Fatalf("albums = %d, want 1", len(first.Albums))
+	}
+	a := first.Albums[0]
+	if a.ID != "al1" || a.Name != "Kind of Blue" || a.Artist != "Miles Davis" {
+		t.Errorf("album row = %+v, want the fixture values", a)
+	}
+	if a.Year != "1959" {
+		t.Errorf("year = %q, want the front of release_date (1959)", a.Year)
+	}
+	if a.TrackCount != 5 {
+		t.Errorf("track count = %d, want 5", a.TrackCount)
+	}
+	if first.Total != 55 || first.NextOffset != 50 {
+		t.Errorf("total/next = %d/%d, want 55/50: one page fetched, never the whole library up front", first.Total, first.NextOffset)
+	}
+
+	second, err := api.SavedAlbums(context.Background(), first.NextOffset)
+	if err != nil {
+		t.Fatalf("SavedAlbums second page: %v", err)
+	}
+	log.want(t, "GET /v1/me/albums?limit=50&offset=0", "GET /v1/me/albums?limit=50&offset=50")
+	if len(second.Albums) != 1 || second.Albums[0].ID != "al2" || second.Albums[0].Year != "1965" {
+		t.Errorf("second page = %+v, want the al2 fixture with year 1965", second)
+	}
+	if second.NextOffset != -1 {
+		t.Errorf("NextOffset = %d, want -1: the end of the list", second.NextOffset)
+	}
+}
+
+func TestWebAPISavedAlbumsErrorCarriesStatus(t *testing.T) {
+	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
+		return 500, `{"error":{"status":500,"message":"boom"}}`
+	})
+	_, err := NewWebAPI(client).SavedAlbums(context.Background(), 0)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 500 || apiErr.Message != "boom" {
+		t.Fatalf("want *APIError 500 boom, got %v", err)
+	}
+}
+
 // --- GET /v1/search ---
 
 const searchTrack1 = `{"id":"4uLU6hMCjMI75M1A2tKUQC","name":"So What","artists":[{"name":"Miles Davis"}],"album":{"name":"Kind of Blue"},"duration_ms":562000}`

@@ -71,7 +71,7 @@ func itemsViaContext(ctx context.Context, uri string, offset int, resolve Contex
 		return ItemsPage{}, fmt.Errorf("resolving %s: %w", contextLabel(uri), err)
 	}
 
-	page := ItemsPage{Offset: offset}
+	page := ItemsPage{Offset: offset, Name: contextName(spotCtx)}
 	var needNames []string
 	for _, p := range spotCtx.Pages {
 		for _, ct := range p.Tracks {
@@ -129,6 +129,16 @@ func itemsViaContext(ctx context.Context, uri string, offset int, resolve Contex
 	}
 	page.NextOffset = -1
 	return page, nil
+}
+
+// contextName reads the resolved context's own display name, when the
+// resolver's metadata carries one (:play with a context target names the
+// strip with it, T25). The keys are not pinned by go-librespot's types —
+// the same best-effort rule as the track metadata keys — and an empty name
+// is honest: the caller falls back to the kind+id label, never an invented
+// title.
+func contextName(spotCtx *connectpb.Context) string {
+	return meta(spotCtx.Metadata, "playlist_name", "album_name", "context_description")
 }
 
 // trackFromContext maps one context entry to a track row or reports it

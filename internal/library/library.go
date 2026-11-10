@@ -180,3 +180,65 @@ func ParseTrackID(target string) (string, error) {
 	}
 	return t, nil
 }
+
+// Target kinds of :play (T25): a track goes straight to the player, the way
+// it always has; a playlist or album is a context that resolves into the
+// list view before anything plays.
+const (
+	TargetTrack    = "track"
+	TargetPlaylist = "playlist"
+	TargetAlbum    = "album"
+)
+
+// Target is one parsed :play target: its kind and bare 22-char base62 id.
+type Target struct {
+	Kind string
+	ID   string
+}
+
+// ParseTarget classifies a :play target (T25). Playlist and album contexts
+// come first — a spotify:<kind>:<id> uri or an open.spotify.com link (with
+// /intl-xx/ segments, query strings, trailing slashes) — and every track
+// form ParseTrackID accepts stays a track, unchanged. A bare 22-char base62
+// id stays a track: that has always been :play's bare form. Anything else
+// is an error the palette renders as its toast.
+func ParseTarget(target string) (Target, error) {
+	t := strings.TrimSpace(target)
+	t = strings.Trim(t, "\"'`")
+	t = strings.TrimSpace(t)
+	for _, kind := range []string{TargetPlaylist, TargetAlbum} {
+		if id, ok := contextIDFromTarget(t, kind); ok {
+			return Target{Kind: kind, ID: id}, nil
+		}
+	}
+	id, err := ParseTrackID(target)
+	if err != nil {
+		return Target{}, err
+	}
+	return Target{Kind: TargetTrack, ID: id}, nil
+}
+
+// contextIDFromTarget extracts the bare id of one context kind from its
+// spotify:<kind>:<id> uri or the segment after "<kind>/" in a pasted link,
+// cut at the query or fragment and stripped of a trailing slash. It reports
+// false for anything that is not a full valid id, so the track parser (and
+// its error) decides the rest — a malformed context never parses as a
+// track, it just fails with the accepted-forms toast.
+func contextIDFromTarget(t, kind string) (string, bool) {
+	var rest string
+	if uri := "spotify:" + kind + ":"; strings.HasPrefix(t, uri) {
+		rest = strings.TrimPrefix(t, uri)
+	} else if i := strings.Index(t, kind+"/"); i >= 0 {
+		rest = t[i+len(kind)+1:]
+	} else {
+		return "", false
+	}
+	if j := strings.IndexAny(rest, "?#"); j >= 0 {
+		rest = rest[:j]
+	}
+	rest = strings.TrimSuffix(strings.TrimSpace(rest), "/")
+	if len(rest) != trackIDLen || strings.Trim(rest, base62) != "" {
+		return "", false
+	}
+	return rest, true
+}

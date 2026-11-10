@@ -46,15 +46,32 @@ type ItemsPage struct {
 	Offset     int
 	Total      int
 	NextOffset int
-	Skipped    int  // entries without a playable uri, counted not dropped
-	Truncated  bool // the resolver returned a subset of the playlist
+	Skipped    int    // entries without a playable uri, counted not dropped
+	Truncated  bool   // the resolver returned a subset of the playlist
+	Name       string // the context's own display name when the resolve carries one; empty means unknown
 }
 
-// AlbumSummary is one search-result row of type album.
+// AlbumSummary is one album row: a search result (T22) or a saved album of
+// the library's ALBUMS group (T23). Year is the front of release_date and
+// TrackCount the collection's own count; search summaries leave both unset
+// (the search shape the app parses carries neither), and the row renders
+// only the facts it actually has.
 type AlbumSummary struct {
-	ID     string
-	Name   string
-	Artist string
+	ID         string
+	Name       string
+	Artist     string
+	Year       string
+	TrackCount int
+}
+
+// AlbumPage is one lazily fetched page of GET /v1/me/albums. NextOffset is
+// the offset of the following page, or -1 when the list is exhausted: the
+// client never fetches everything up front (the playlists paging, T23).
+type AlbumPage struct {
+	Albums     []AlbumSummary
+	Offset     int
+	Total      int
+	NextOffset int
 }
 
 // SearchTotals are the per-type totals of one search response.
@@ -83,6 +100,9 @@ type SearchPage struct {
 type Fetch interface {
 	// Playlists fetches one page of the user's playlists (50 per page).
 	Playlists(ctx context.Context, offset int) (PlaylistPage, error)
+	// SavedAlbums fetches one page of the user's saved albums (50 per page,
+	// the same lazy paging as playlists, T23).
+	SavedAlbums(ctx context.Context, offset int) (AlbumPage, error)
 	// Items returns one slice of a playlist's contents resolved through the
 	// playback session (no Web API quota, no owner restriction). The set is
 	// bounded; Skipped/Truncated state the parts it could not show.

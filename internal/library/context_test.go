@@ -272,6 +272,57 @@ func TestItemsWithoutResolverIsAnError(t *testing.T) {
 	}
 }
 
+// The resolved context's own display name rides the page when the resolver's
+// metadata carries it (:play with a context target names the strip with it,
+// T25); an album resolve answers with the album spelling.
+func TestItemsViaResolverCarriesTheContextName(t *testing.T) {
+	track := func() *connectpb.ContextTrack {
+		return &connectpb.ContextTrack{Uri: "spotify:track:4uLU6hMCjMI75M1A2tKUQC", Metadata: map[string]string{
+			"title": "So What", "artist_name": "Miles Davis", "album_name": "Kind of Blue", "duration": "562000",
+		}}
+	}
+	t.Run("playlist name", func(t *testing.T) {
+		r := &fakeResolver{ctx: &connectpb.Context{
+			Uri:      "spotify:playlist:pl2",
+			Metadata: map[string]string{"playlist_name": "Road Trip"},
+			Pages:    []*connectpb.ContextPage{ctxPage(track())},
+		}}
+		page, err := resolverAPI(r, nil).Items(context.Background(), "pl2", 0)
+		if err != nil {
+			t.Fatalf("Items: %v", err)
+		}
+		if page.Name != "Road Trip" {
+			t.Errorf("page name = %q, want the context's own playlist_name", page.Name)
+		}
+	})
+	t.Run("album name", func(t *testing.T) {
+		r := &fakeResolver{ctx: &connectpb.Context{
+			Uri:      "spotify:album:al1",
+			Metadata: map[string]string{"album_name": "Kind of Blue"},
+			Pages:    []*connectpb.ContextPage{ctxPage(track())},
+		}}
+		page, err := resolverAPI(r, nil).AlbumItems(context.Background(), "al1", 0)
+		if err != nil {
+			t.Fatalf("AlbumItems: %v", err)
+		}
+		if page.Name != "Kind of Blue" {
+			t.Errorf("page name = %q, want the context's own album_name", page.Name)
+		}
+	})
+	t.Run("no name in the metadata is an empty name, never invented", func(t *testing.T) {
+		r := &fakeResolver{ctx: &connectpb.Context{
+			Pages: []*connectpb.ContextPage{ctxPage(track())},
+		}}
+		page, err := resolverAPI(r, nil).Items(context.Background(), "pl2", 0)
+		if err != nil {
+			t.Fatalf("Items: %v", err)
+		}
+		if page.Name != "" {
+			t.Errorf("page name = %q, want empty when the context carries none", page.Name)
+		}
+	})
+}
+
 // T22: albums are the second caller of the same resolver — the exact context
 // uri is spotify:album:<id> (no Web API quota, no owner restriction), and the
 // mapping/mapping skip/truncation logic is the playlist path's, not a copy.

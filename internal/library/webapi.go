@@ -179,6 +179,64 @@ func (w *WebAPI) Playlists(ctx context.Context, offset int) (PlaylistPage, error
 	return page, nil
 }
 
+// --- GET /v1/me/albums (T23: saved albums, the ALBUMS group of the
+// Playlists view) ---
+
+// SavedAlbums fetches one page of the user's saved albums over the same
+// Web API token as playlists: 50 per page, offset pagination, `next`
+// followed lazily. The saved-albums object wraps the album one level down,
+// and the row keeps only the facts the 2026 shape carries: id, name,
+// artist, the year (front of release_date) and the album's own track
+// count. There is no owner/privacy fact to invent.
+func (w *WebAPI) SavedAlbums(ctx context.Context, offset int) (AlbumPage, error) {
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(playlistPageLimit))
+	q.Set("offset", strconv.Itoa(offset))
+	body, err := w.call(ctx, "GET", "v1/me/albums", q)
+	if err != nil {
+		return AlbumPage{}, err
+	}
+	var raw struct {
+		Total int `json:"total"`
+		Items []struct {
+			Album struct {
+				ID      string `json:"id"`
+				Name    string `json:"name"`
+				Artists []struct {
+					Name string `json:"name"`
+				} `json:"artists"`
+				ReleaseDate string `json:"release_date"`
+				TotalTracks int    `json:"total_tracks"`
+			} `json:"album"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return AlbumPage{}, fmt.Errorf("decoding saved albums: %w", err)
+	}
+	page := AlbumPage{Offset: offset, Total: raw.Total}
+	for _, it := range raw.Items {
+		page.Albums = append(page.Albums, AlbumSummary{
+			ID:         it.Album.ID,
+			Name:       it.Album.Name,
+			Artist:     joinArtists(it.Album.Artists),
+			Year:       releaseYear(it.Album.ReleaseDate),
+			TrackCount: it.Album.TotalTracks,
+		})
+	}
+	page.NextOffset = nextOffset(offset, playlistPageLimit, raw.Total)
+	return page, nil
+}
+
+// releaseYear keeps the year of an ISO release date: "1959-08-17" and
+// "1959" both render as 1959. Anything shorter is taken as-is — the row
+// never invents a year.
+func releaseYear(date string) string {
+	if len(date) >= 4 {
+		return date[:4]
+	}
+	return date
+}
+
 // --- playlist and album contents via the playback resolver ---
 
 // Items resolves the playlist's contents the way playback does
