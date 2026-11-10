@@ -17,7 +17,9 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -169,6 +171,13 @@ func (w *WebAPI) Items(ctx context.Context, playlistID string, offset int) (Item
 	q.Set("offset", strconv.Itoa(offset))
 	body, err := w.call(ctx, "GET", "v1/playlists/"+url.PathEscape(playlistID)+"/items", q)
 	if err != nil {
+		// 2026 (S14): a playlist you neither own nor collaborate on is refused with
+		// 403, not with a missing items key. That is the same fact and it deserves the
+		// same honest state, not "403 forbidden".
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden {
+			return ItemsPage{Offset: offset, Unavailable: unavailableContents}, nil
+		}
 		return ItemsPage{}, err
 	}
 	var raw struct {
@@ -197,7 +206,7 @@ func (w *WebAPI) Items(ctx context.Context, playlistID string, offset int) (Item
 	if raw.Items == nil {
 		// 2026 (S14): no items key = the user neither owns nor collaborates
 		// on this playlist. Never render that as an empty list.
-		page.Unavailable = "contents unavailable · you are not the owner or a collaborator"
+		page.Unavailable = unavailableContents
 		return page, nil
 	}
 	for _, it := range *raw.Items {
@@ -381,3 +390,5 @@ func (w *WebAPI) SetSaved(ctx context.Context, trackID string, saved bool) error
 	_, err := w.call(ctx, method, path, q)
 	return err
 }
+
+const unavailableContents = "contents unavailable · you are not the owner or a collaborator"

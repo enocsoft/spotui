@@ -489,3 +489,33 @@ func TestWebAPISearchMalformedBodyIsAnError(t *testing.T) {
 		t.Fatal("a malformed body must be an error, not silent empty results")
 	}
 }
+
+// TestItemsForbiddenIsUnavailable: in 2026 Spotify refuses the items of a playlist
+// you neither own nor collaborate on with 403 instead of withholding the key. Both
+// shapes are the same fact and must render the same honest state.
+func TestItemsForbiddenIsUnavailable(t *testing.T) {
+	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
+		return http.StatusForbidden, `{"error":{"status":403,"message":"Forbidden"}}`
+	})
+	page, err := NewWebAPI(client).Items(context.Background(), "37i9dQZF1DXcBWIGoYBM5M", 0)
+	if err != nil {
+		t.Fatalf("a 403 is not a failure to report, it is an unavailable playlist: %v", err)
+	}
+	if page.Unavailable == "" {
+		t.Fatalf("a 403 must set Unavailable, got %+v", page)
+	}
+	if !strings.Contains(page.Unavailable, "owner") {
+		t.Errorf("the state should say why: %q", page.Unavailable)
+	}
+}
+
+// TestItemsOtherErrorsStillFail: only 403 maps to unavailable. A 500 stays an error
+// so a real outage is never disguised as a permissions fact.
+func TestItemsOtherErrorsStillFail(t *testing.T) {
+	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
+		return http.StatusInternalServerError, `{"error":{"status":500,"message":"boom"}}`
+	})
+	if _, err := NewWebAPI(client).Items(context.Background(), "x", 0); err == nil {
+		t.Fatal("a 500 must surface as an error")
+	}
+}
