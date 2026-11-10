@@ -15,9 +15,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotui/internal/config"
-	"github.com/nahuel/spotui/internal/library"
-	"github.com/nahuel/spotui/internal/library/mock"
+	"github.com/enocsoft/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library/mock"
 )
 
 // blockingPlayer is a library.Player whose Play blocks on release until the

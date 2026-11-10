@@ -28,10 +28,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotui/internal/app"
-	"github.com/nahuel/spotui/internal/config"
-	"github.com/nahuel/spotui/internal/library/mock"
-	"github.com/nahuel/spotui/internal/player"
+	"github.com/enocsoft/spotui/internal/app"
+	"github.com/enocsoft/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/library/mock"
+	"github.com/enocsoft/spotui/internal/player"
 )
 
 func main() {

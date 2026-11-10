@@ -16,10 +16,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/nahuel/spotui/internal/config"
-	"github.com/nahuel/spotui/internal/library"
-	"github.com/nahuel/spotui/internal/library/mock"
-	"github.com/nahuel/spotui/internal/ui/theme"
+	"github.com/enocsoft/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library/mock"
+	"github.com/enocsoft/spotui/internal/ui/theme"
 )
 
 const (

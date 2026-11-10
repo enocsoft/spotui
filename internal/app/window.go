@@ -13,7 +13,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/nahuel/spotui/internal/ui/theme"
+	"github.com/enocsoft/spotui/internal/ui/theme"
 )
 
 // windowKind is which floating window is open. Zero value = none (S19: one

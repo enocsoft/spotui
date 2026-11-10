@@ -11,7 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // contentsFetch is a stub catalog whose playlist and album both resolve one

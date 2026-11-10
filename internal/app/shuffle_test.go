@@ -16,7 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // reversePerm is an injected permutation generator: it reverses whatever

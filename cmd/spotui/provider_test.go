@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nahuel/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/config"
 )
 
 func TestProviderStoresAValidClientID(t *testing.T) {

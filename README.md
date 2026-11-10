@@ -34,7 +34,7 @@ accounts, and Spotify refuses to play without an active subscription.
 With `go`:
 
 ```sh
-go install github.com/nahuel/spotui/cmd/spotui@latest
+go install github.com/enocsoft/spotui/cmd/spotui@latest
 ```
 
 Or from a checkout of this repository:

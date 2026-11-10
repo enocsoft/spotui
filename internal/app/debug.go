@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/nahuel/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/config"
 )
 
 // debugf appends to <state>/debug.log only when SPOTUI_DEBUG is set. It

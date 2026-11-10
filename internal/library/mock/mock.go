@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // Mock is the in-memory backing store. It is safe for single-goroutine use

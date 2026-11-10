@@ -2,15 +2,15 @@ package app
 
 import (
 	"fmt"
-	"github.com/nahuel/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/config"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/nahuel/spotui/internal/library"
-	"github.com/nahuel/spotui/internal/ui/theme"
+	"github.com/enocsoft/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/ui/theme"
 )
 
 // Mock chrome until slice 2 wires the real account (artboard copy).

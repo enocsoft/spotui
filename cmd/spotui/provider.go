@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/nahuel/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/config"
 )
 
 // clientIDPattern is what a Spotify app client id looks like: 32 hex chars.

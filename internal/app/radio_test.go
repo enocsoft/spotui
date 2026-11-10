@@ -22,8 +22,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotui/internal/config"
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // radioData is a DataSource whose session the test drives directly.

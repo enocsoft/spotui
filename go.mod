@@ -1,4 +1,4 @@
-module github.com/nahuel/spotui
+module github.com/enocsoft/spotui
 
 go 1.27.3
 

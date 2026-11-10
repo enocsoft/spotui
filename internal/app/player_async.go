@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // playerOp names which command a playerMsg answers, so Update can apply the

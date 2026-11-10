@@ -16,7 +16,7 @@ import (
 
 	connectpb "github.com/elxgy/go-librespot/proto/spotify/connectstate"
 
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // Catalog implements library.CatalogProvider: the UI drives every fetch from

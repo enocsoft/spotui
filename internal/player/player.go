@@ -30,9 +30,9 @@ import (
 	"github.com/elxgy/go-librespot/session"
 	"github.com/elxgy/go-librespot/sessionconfig"
 
-	"github.com/nahuel/spotui/internal/auth"
-	"github.com/nahuel/spotui/internal/config"
-	"github.com/nahuel/spotui/internal/library"
+	"github.com/enocsoft/spotui/internal/auth"
+	"github.com/enocsoft/spotui/internal/config"
+	"github.com/enocsoft/spotui/internal/library"
 )
 
 // audioBackend is the go-librespot output backend: pure-Go PulseAudio
