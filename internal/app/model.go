@@ -142,6 +142,22 @@ type Model struct {
 	albumsTotal   int
 	albumsNext    int // offset of the next page, -1 when exhausted
 
+	// Saved tracks (T29): the SAVED group of the Playlists view and the saved
+	// list opened in the Tracks view share one state — one lazily fetched page
+	// of GET /v1/me/tracks after another, the same paging contract as the
+	// playlists and albums panels above. The group stays collapsed (and
+	// fetches nothing) until it is expanded. plIsSaved marks the open Tracks
+	// view as the saved list: the list IS the saved set, so every row renders
+	// [x], `enter` plays and `l` unsaves (the row leaves only on confirmation).
+	savedLoaded  bool // a page applied at least once — no auto-refetch after it
+	savedLoading bool
+	savedErr     error
+	savedPending int // offset of the in-flight page, -1 when none
+	savedTracks  []library.Track
+	savedTotal   int
+	savedNext    int // offset of the next page, -1 when exhausted
+	plIsSaved    bool
+
 	// Focused playlist/album contents (drill-down), resolved through the playback
 	// resolver (library/context.go). plSkipped/plTruncated carry what the
 	// bounded resolver could not show, footnoted under the list — never a
@@ -381,6 +397,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case albumsMsg:
 		m.applyAlbums(msg)
+		return m, nil
+
+	case savedTracksMsg:
+		m.applySavedTracks(msg)
 		return m, nil
 
 	case itemsMsg:

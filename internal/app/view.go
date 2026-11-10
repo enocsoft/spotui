@@ -358,6 +358,19 @@ func (m Model) realContextStrip(w int) string {
 					len(m.sPlaylists), plural(len(m.sPlaylists))))
 			}
 		}
+	case m.section == SectionTracks && m.plIsSaved:
+		// T29: the open list is the saved set — the strip names it and the
+		// account it belongs to, and the count is the server's total.
+		left = theme.LabelStyle.Render("saved") + " " + theme.GlyphCrumb + " " +
+			theme.TitleStyle.Render(truncate(mockUser, w/3))
+		switch {
+		case m.savedErr != nil:
+			right = theme.MetaStyle.Render("could not load")
+		case m.savedLoading && len(m.savedTracks) == 0:
+			right = theme.MetaStyle.Render("loading…")
+		default:
+			right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks", m.savedTotal))
+		}
 	case m.section == SectionTracks && m.plID == "":
 		left = theme.TitleStyle.Render("tracks")
 		right = theme.MetaStyle.Render("no playlist open")
@@ -904,6 +917,9 @@ func (m Model) keyHints(maxWidth int) string {
 func (m Model) viewState() string {
 	if m.sView {
 		return "search / " + strings.ToLower(truncate(m.sQuery, 24))
+	}
+	if m.plIsSaved {
+		return "tracks / saved" // T29: the open list is the saved set
 	}
 	switch m.section {
 	case SectionPlaylists:

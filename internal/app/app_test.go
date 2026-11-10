@@ -60,7 +60,7 @@ func runPlayerCmds(t *testing.T, m *Model, cmd tea.Cmd) {
 		}
 	case playerMsg:
 		applyRun(t, m, msg)
-	case playlistsMsg, albumsMsg, itemsMsg, searchMsg, savedMsg:
+	case playlistsMsg, albumsMsg, savedTracksMsg, itemsMsg, searchMsg, savedMsg:
 		applyRun(t, m, msg)
 	default:
 		// ticks and toasts: scheduled for real by bubbletea, dropped here

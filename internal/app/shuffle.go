@@ -119,6 +119,9 @@ func (m Model) viewTracks() []library.Track {
 		case m.sView:
 			return m.sTracks
 		case m.section == SectionTracks:
+			if m.plIsSaved {
+				return m.savedTracks // T29: the open list IS the saved set
+			}
 			return m.plTracks
 		default:
 			return nil
@@ -158,6 +161,9 @@ func (m Model) viewKey() string {
 	if m.fetch != nil {
 		if m.sView {
 			return "search\x00" + m.sQuery
+		}
+		if m.plIsSaved {
+			return "saved\x00tracks" // T29: the saved list is its own view
 		}
 		return "playlist\x00" + m.plID
 	}

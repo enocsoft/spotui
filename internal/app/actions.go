@@ -175,7 +175,18 @@ func (m *Model) onEnter() tea.Cmd {
 			return m.openAlbum(r.al)
 		}
 		if r.kind == rowHeader {
+			name := strings.TrimPrefix(r.text, theme.GlyphExpanded+" ")
+			name = strings.TrimPrefix(name, theme.GlyphCollapsed+" ")
+			if name == "SAVED" && m.fetch != nil {
+				// T29: enter on the SAVED group opens the saved songs in the
+				// Tracks view — the list IS the saved set.
+				return m.openSavedTracks()
+			}
 			return m.onToggle()
+		}
+		if r.kind == rowTrack {
+			// T29: a saved-track row of the expanded SAVED group plays in place.
+			return m.playRow(r.track)
 		}
 		return m.setToast("enter · nothing to open here")
 	}
@@ -250,6 +261,16 @@ func (m *Model) onToggle() tea.Cmd {
 			m.clampCursor()
 			if m.expanded["ALBUMS"] {
 				return m.ensureAlbumsLoaded()
+			}
+			return nil
+		}
+		if name == "SAVED" && m.fetch != nil {
+			// T29: expanding the saved-songs group fetches its first page
+			// lazily; collapsing is local — the albums behaviour one group later.
+			m.expanded["SAVED"] = !m.expanded["SAVED"]
+			m.clampCursor()
+			if m.expanded["SAVED"] {
+				return m.ensureSavedTracksLoaded()
 			}
 			return nil
 		}

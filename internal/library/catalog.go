@@ -74,6 +74,17 @@ type AlbumPage struct {
 	NextOffset int
 }
 
+// SavedTracksPage is one lazily fetched page of GET /v1/me/tracks (T29): the
+// user's saved songs. NextOffset is the offset of the following page, or -1
+// when the list is exhausted — the same lazy paging as playlists and saved
+// albums. Every mapped track carries Saved: true: the list IS the saved set.
+type SavedTracksPage struct {
+	Tracks     []Track
+	Offset     int
+	Total      int
+	NextOffset int
+}
+
 // SearchTotals are the per-type totals of one search response.
 type SearchTotals struct {
 	Tracks    int
@@ -103,6 +114,10 @@ type Fetch interface {
 	// SavedAlbums fetches one page of the user's saved albums (50 per page,
 	// the same lazy paging as playlists, T23).
 	SavedAlbums(ctx context.Context, offset int) (AlbumPage, error)
+	// SavedTracks fetches one page of the user's saved songs (50 per page,
+	// the same lazy paging, T29). A refusal from the endpoint (a Development
+	// Mode app can be denied it) surfaces as *APIError — never an empty list.
+	SavedTracks(ctx context.Context, offset int) (SavedTracksPage, error)
 	// Items returns one slice of a playlist's contents resolved through the
 	// playback session (no Web API quota, no owner restriction). The set is
 	// bounded; Skipped/Truncated state the parts it could not show.

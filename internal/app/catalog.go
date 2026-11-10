@@ -46,6 +46,15 @@ type albumsMsg struct {
 	err    error
 }
 
+// savedTracksMsg carries one page of GET /v1/me/tracks (or its error): the
+// SAVED group of the Playlists view and the saved list in the Tracks view
+// (T29).
+type savedTracksMsg struct {
+	offset int
+	page   library.SavedTracksPage
+	err    error
+}
+
 // itemsMsg carries one slice of the playlist's resolved contents (or its
 // error). The contents ride the playback resolver (library/context.go).
 type itemsMsg struct {
@@ -88,6 +97,16 @@ func (m Model) albumsCmd(offset int) tea.Cmd {
 	return func() tea.Msg {
 		page, err := f.SavedAlbums(context.Background(), offset)
 		return albumsMsg{offset: offset, page: page, err: err}
+	}
+}
+
+// savedTracksCmd fetches one page of the user's saved songs (T29) the same
+// way the albums command does: blocking call inside a tea.Cmd goroutine.
+func (m Model) savedTracksCmd(offset int) tea.Cmd {
+	f := m.fetch
+	return func() tea.Msg {
+		page, err := f.SavedTracks(context.Background(), offset)
+		return savedTracksMsg{offset: offset, page: page, err: err}
 	}
 }
 
@@ -167,6 +186,28 @@ func (m *Model) applyAlbums(msg albumsMsg) {
 	}
 	m.albumsTotal = msg.page.Total
 	m.albumsNext = msg.page.NextOffset
+	m.clampCursor()
+}
+
+func (m *Model) applySavedTracks(msg savedTracksMsg) {
+	if msg.offset != m.savedPending {
+		return // a stale page (another retry won the race): drop it
+	}
+	m.savedPending, m.savedLoading = -1, false
+	if msg.err != nil {
+		m.savedErr = msg.err
+		return
+	}
+	m.savedErr = nil
+	m.savedLoaded = true
+	if msg.offset == 0 {
+		m.savedTracks = msg.page.Tracks
+	} else {
+		m.savedTracks = append(m.savedTracks, msg.page.Tracks...)
+	}
+	m.savedTotal = msg.page.Total
+	m.savedNext = msg.page.NextOffset
+	m.rebuildShuffle() // new playable rows landed: re-permute over them
 	m.clampCursor()
 }
 
@@ -254,6 +295,12 @@ func (m *Model) applySaved(msg savedMsg) tea.Cmd {
 		return m.setToast("✗ save failed · " + msg.err.Error())
 	}
 	m.markSaved(msg.trackID, msg.saved)
+	if !msg.saved {
+		// T29: a confirmed unsave removes the track from the saved list — the
+		// row leaves only here, after the server answered, never on the
+		// keypress. The server's total shrank with it.
+		m.removeSavedTrack(msg.trackID)
+	}
 	if t, ok := m.trackByID(msg.trackID); ok {
 		if msg.saved {
 			return m.setToast("saved · " + t.Title)
@@ -277,8 +324,28 @@ func (m *Model) markSaved(id string, saved bool) {
 	}
 }
 
+// removeSavedTrack drops a confirmed-unsaved track from the saved list (T29)
+// and keeps the count honest; a track the list does not hold is a no-op.
+func (m *Model) removeSavedTrack(id string) {
+	for i := range m.savedTracks {
+		if m.savedTracks[i].ID == id {
+			m.savedTracks = append(m.savedTracks[:i], m.savedTracks[i+1:]...)
+			if m.savedTotal > 0 {
+				m.savedTotal--
+			}
+			m.clampCursor()
+			return
+		}
+	}
+}
+
 func (m Model) trackByID(id string) (library.Track, bool) {
 	for _, t := range m.plTracks {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	for _, t := range m.savedTracks {
 		if t.ID == id {
 			return t, true
 		}
@@ -305,6 +372,9 @@ func (m *Model) ensureMore() tea.Cmd {
 	if m.section == SectionPlaylists {
 		return m.ensureMorePlaylists()
 	}
+	if m.plIsSaved {
+		return m.ensureMoreSavedTracks()
+	}
 	return m.ensureMoreItems()
 }
 
@@ -327,15 +397,21 @@ func (m *Model) ensureMorePlaylists() tea.Cmd {
 	}
 	// The group the last row belongs to owns the next page (T23): album rows
 	// page the saved albums, everything else the playlists. A trailing status
-	// row belongs to the group whose items sit right above it.
+	// row belongs to the group whose items sit right above it, and a collapsed
+	// group header (ALBUMS, SAVED) never interrupts the paging of the group
+	// whose items sit above it either — reaching it means that group's list
+	// ended for now.
 	group := rows[len(rows)-1].kind
 	if group == rowStatus && len(rows) >= 2 {
 		group = rows[len(rows)-2].kind
 	}
-	if group == rowHeader && !m.expanded["ALBUMS"] {
-		// a collapsed ALBUMS header never interrupts the playlists paging:
-		// reaching it means the playlist list ended for now
-		group = rowPlaylistItem
+	if group == rowHeader {
+		for i := len(rows) - 1; i >= 0; i-- {
+			if k := rows[i].kind; k == rowPlaylistItem || k == rowAlbumItem || k == rowTrack {
+				group = k
+				break
+			}
+		}
 	}
 	switch group {
 	case rowAlbumItem:
@@ -350,6 +426,13 @@ func (m *Model) ensureMorePlaylists() tea.Cmd {
 		}
 		m.plsLoading, m.plsPending = true, m.plsNext
 		return m.playlistsCmd(m.plsNext)
+	case rowTrack:
+		// the saved-track rows of the expanded SAVED group (T29)
+		if m.savedLoading || m.savedNext < 0 || m.savedErr != nil {
+			return nil
+		}
+		m.savedLoading, m.savedPending = true, m.savedNext
+		return m.savedTracksCmd(m.savedNext)
 	}
 	return nil
 }
@@ -364,6 +447,20 @@ func (m *Model) ensureMoreItems() tea.Cmd {
 	}
 	m.plItemsLoading, m.iPending = true, m.plNext
 	return m.itemsCmd(m.plID, m.plNext)
+}
+
+// ensureMoreSavedTracks pages the open saved list (T29): the same lazy
+// follow-the-cursor contract as the other paged panels.
+func (m *Model) ensureMoreSavedTracks() tea.Cmd {
+	if m.savedLoading || m.savedErr != nil || m.savedNext < 0 {
+		return nil
+	}
+	rows := m.visibleRows()
+	if m.cursor != len(rows)-1 {
+		return nil
+	}
+	m.savedLoading, m.savedPending = true, m.savedNext
+	return m.savedTracksCmd(m.savedNext)
 }
 
 // ensurePlaylistsLoaded fires the first playlists page once the session is
@@ -387,6 +484,17 @@ func (m *Model) ensureAlbumsLoaded() tea.Cmd {
 	return m.albumsCmd(0)
 }
 
+// ensureSavedTracksLoaded fires the saved-tracks first page once (T29): the
+// group fetches when it is expanded, not on session start — the playlists
+// behaviour, two groups later.
+func (m *Model) ensureSavedTracksLoaded() tea.Cmd {
+	if m.fetch == nil || m.savedLoaded || m.savedLoading {
+		return nil
+	}
+	m.savedLoading, m.savedPending = true, 0
+	return m.savedTracksCmd(0)
+}
+
 // --- actions on the real catalog ---
 
 // openPlaylist drills into a real playlist. Cached contents are kept: re-entering
@@ -403,6 +511,7 @@ func (m *Model) openPlaylist(s library.PlaylistSummary) tea.Cmd {
 	m.plID, m.plName, m.plOwner = s.ID, s.Name, s.Owner
 	m.plPrivate, m.plCollab = s.Private, s.Collaborative
 	m.plIsAlbum, m.plArtist = false, ""
+	m.plIsSaved = false
 	m.plTracks, m.plItemsErr = nil, nil
 	m.plTotal, m.plNext = s.TrackCount, -1
 	m.plSkipped, m.plTruncated = 0, false
@@ -430,6 +539,7 @@ func (m *Model) openAlbum(a library.AlbumSummary) tea.Cmd {
 	}
 	m.plID, m.plName, m.plArtist = a.ID, a.Name, a.Artist
 	m.plIsAlbum = true
+	m.plIsSaved = false
 	m.plOwner, m.plPrivate, m.plCollab = "", false, false
 	m.plTracks, m.plItemsErr = nil, nil
 	m.plTotal, m.plNext = 0, -1
@@ -437,6 +547,20 @@ func (m *Model) openAlbum(a library.AlbumSummary) tea.Cmd {
 	m.plItemsLoading, m.iPending = true, 0
 	m.rebuildShuffle() // the view changed: the old permutation is void
 	return m.itemsCmd(a.ID, 0)
+}
+
+// openSavedTracks opens the saved songs in the Tracks view (T29): the list IS
+// the saved set, so every row renders [x], `enter` plays and `l` unsaves. The
+// group's pages and this view share one state — opening never refetches; if
+// the group was never expanded, the first page loads now.
+func (m *Model) openSavedTracks() tea.Cmd {
+	m.section = SectionTracks
+	m.sView = false
+	m.plIsSaved = true
+	m.cursor, m.listOffset = 0, 0
+	m.playOnLoad = false
+	m.rebuildShuffle() // the view changed: the old permutation is void
+	return m.ensureSavedTracksLoaded()
 }
 
 // startSearch runs (or re-runs) a query: one capped request at offset 0.
@@ -466,6 +590,7 @@ func (m *Model) playContext(kind, id string) tea.Cmd {
 	m.cursor, m.listOffset = 0, 0
 	m.plID = id
 	m.plIsAlbum = kind == library.TargetAlbum
+	m.plIsSaved = false
 	m.plName, m.plOwner, m.plArtist = "", "", ""
 	m.plPrivate, m.plCollab = false, false
 	m.plTracks, m.plItemsErr = nil, nil
@@ -564,23 +689,49 @@ func (m Model) playlistsRows() []row {
 		aglyph = theme.GlyphExpanded
 	}
 	rows = append(rows, row{kind: rowHeader, text: aglyph + " ALBUMS", count: m.albumsTotal})
-	if !m.expanded["ALBUMS"] {
-		return rows
-	}
-	if len(m.albums) == 0 && !m.albumsLoading {
-		if m.albumsErr != nil {
+	if m.expanded["ALBUMS"] {
+		if len(m.albums) == 0 && !m.albumsLoading {
+			if m.albumsErr != nil {
+				rows = append(rows, m.errorStatusRow(m.albumsErr))
+			} else {
+				rows = append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " no saved albums"})
+			}
+		}
+		for _, a := range m.albums {
+			rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: albumMeta(a), al: a})
+		}
+		if m.albumsErr != nil && len(m.albums) > 0 {
 			rows = append(rows, m.errorStatusRow(m.albumsErr))
-		} else {
-			rows = append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " no saved albums"})
+		}
+		if m.albumsLoading && len(m.albums) > 0 {
+			rows = append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading more…"})
 		}
 	}
-	for _, a := range m.albums {
-		rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: albumMeta(a), al: a})
+	// T29: the saved songs are the third group of the same view — the albums
+	// behaviour one group later: collapsed until expanded, expanding fetches
+	// the first page lazily, and enter on the header opens the saved list.
+	sglyph := theme.GlyphCollapsed
+	if m.expanded["SAVED"] {
+		sglyph = theme.GlyphExpanded
 	}
-	if m.albumsErr != nil && len(m.albums) > 0 {
-		rows = append(rows, m.errorStatusRow(m.albumsErr))
+	rows = append(rows, row{kind: rowHeader, text: sglyph + " SAVED", count: m.savedTotal})
+	if !m.expanded["SAVED"] {
+		return rows
 	}
-	if m.albumsLoading && len(m.albums) > 0 {
+	if len(m.savedTracks) == 0 && !m.savedLoading {
+		if m.savedErr != nil {
+			rows = append(rows, m.errorStatusRow(m.savedErr))
+		} else {
+			rows = append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " no saved tracks"})
+		}
+	}
+	for i, t := range m.savedTracks {
+		rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)})
+	}
+	if m.savedErr != nil && len(m.savedTracks) > 0 {
+		rows = append(rows, m.errorStatusRow(m.savedErr))
+	}
+	if m.savedLoading && len(m.savedTracks) > 0 {
 		rows = append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading more…"})
 	}
 	return rows
@@ -616,6 +767,8 @@ func (m Model) trackRows() []row {
 	tracks := m.viewTracks()
 	rows := make([]row, 0, len(tracks)+2)
 	switch {
+	case m.section == SectionTracks && m.plIsSaved:
+		rows = m.appendSavedStatus(rows, len(tracks))
 	case m.section == SectionTracks && m.plID == "":
 		rows = append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " no playlist open · pick one in playlists"})
 	case m.section == SectionTracks:
@@ -624,8 +777,43 @@ func (m Model) trackRows() []row {
 	for i, t := range tracks {
 		rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)})
 	}
-	if m.section == SectionTracks && m.plID != "" {
+	if m.section == SectionTracks && m.plIsSaved {
+		rows = m.appendSavedFootnotes(rows, len(tracks))
+	} else if m.section == SectionTracks && m.plID != "" {
 		rows = m.appendFootnotes(rows, len(tracks))
+	}
+	return rows
+}
+
+// appendSavedStatus puts the panel state in place of an empty saved list (T29):
+// loading, the endpoint's error (status and message, never an empty list
+// pretending nothing is saved), or a real empty saved set.
+func (m Model) appendSavedStatus(rows []row, n int) []row {
+	if n > 0 {
+		return rows
+	}
+	switch {
+	case m.savedErr != nil:
+		return append(rows, m.errorStatusRow(m.savedErr))
+	case m.savedLoading:
+		return append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading tracks…"})
+	default:
+		return append(rows, row{kind: rowStatus, st: stEmpty,
+			text: theme.GlyphIdle + " no saved tracks"})
+	}
+}
+
+// appendSavedFootnotes carries the saved list's paging states under its rows:
+// the in-flight page and a trailing error — never a silent stop.
+func (m Model) appendSavedFootnotes(rows []row, n int) []row {
+	if n == 0 {
+		return rows // the status row above already carries the facts
+	}
+	if m.savedLoading {
+		rows = append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading more…"})
+	}
+	if m.savedErr != nil {
+		rows = append(rows, m.errorStatusRow(m.savedErr))
 	}
 	return rows
 }

@@ -31,13 +31,14 @@ const (
 
 // stubFetch records every catalog call and serves canned pages/errors.
 type stubFetch struct {
-	playlistsFn  func(offset int) (library.PlaylistPage, error)
-	albumsFn     func(offset int) (library.AlbumPage, error)
-	itemsFn      func(id string, offset int) (library.ItemsPage, error)
-	albumItemsFn func(id string, offset int) (library.ItemsPage, error)
-	searchFn     func(query string, offset int) (library.SearchPage, error)
-	savedFn      func(id string, saved bool) error
-	calls        []string
+	playlistsFn   func(offset int) (library.PlaylistPage, error)
+	albumsFn      func(offset int) (library.AlbumPage, error)
+	savedTracksFn func(offset int) (library.SavedTracksPage, error)
+	itemsFn       func(id string, offset int) (library.ItemsPage, error)
+	albumItemsFn  func(id string, offset int) (library.ItemsPage, error)
+	searchFn      func(query string, offset int) (library.SearchPage, error)
+	savedFn       func(id string, saved bool) error
+	calls         []string
 }
 
 func (f *stubFetch) Playlists(ctx context.Context, offset int) (library.PlaylistPage, error) {
@@ -48,6 +49,11 @@ func (f *stubFetch) Playlists(ctx context.Context, offset int) (library.Playlist
 func (f *stubFetch) SavedAlbums(ctx context.Context, offset int) (library.AlbumPage, error) {
 	f.calls = append(f.calls, fmt.Sprintf("albums %d", offset))
 	return f.albumsFn(offset)
+}
+
+func (f *stubFetch) SavedTracks(ctx context.Context, offset int) (library.SavedTracksPage, error) {
+	f.calls = append(f.calls, fmt.Sprintf("savedTracks %d", offset))
+	return f.savedTracksFn(offset)
 }
 
 func (f *stubFetch) Items(ctx context.Context, id string, offset int) (library.ItemsPage, error) {
@@ -143,6 +149,10 @@ func applyCatalogMsg(t *testing.T, m *Model, msg tea.Msg) {
 		*m = updated.(Model)
 		runPlayerCmds(t, m, cmd) // a resolved context may play its first track
 	case albumsMsg:
+		updated, cmd := m.Update(msg)
+		*m = updated.(Model)
+		runPlayerCmds(t, m, cmd)
+	case savedTracksMsg:
 		updated, cmd := m.Update(msg)
 		*m = updated.(Model)
 		runPlayerCmds(t, m, cmd)
@@ -524,15 +534,19 @@ func TestSavedAlbumsSectionRendersAndPagesLazily(t *testing.T) {
 		t.Fatalf("the library root starts with the playlists group, rows = %+v", rows)
 	}
 	last := rows[len(rows)-1]
-	if last.kind != rowHeader || !strings.Contains(last.text, "ALBUMS") {
-		t.Fatalf("the library root ends with the ALBUMS group header, rows = %+v", rows)
+	if last.kind != rowHeader || !strings.Contains(last.text, "SAVED") {
+		t.Fatalf("the library root ends with the SAVED group header (T29), rows = %+v", rows)
+	}
+	alb := rows[len(rows)-2]
+	if alb.kind != rowHeader || !strings.Contains(alb.text, "ALBUMS") {
+		t.Fatalf("the SAVED group sits right after the ALBUMS group, rows = %+v", rows)
 	}
 	if got := strings.Join(f.calls, ","); strings.Contains(got, "albums") {
 		t.Fatalf("a collapsed ALBUMS group must not fetch, made [%s]", got)
 	}
 
 	// expanding the group fetches exactly the first page
-	m.cursor = len(m.visibleRows()) - 1
+	m.cursor = len(m.visibleRows()) - 2 // the ALBUMS header, SAVED collapsed below it
 	pressRun(t, m, "l")
 	if got := strings.Join(f.calls, ","); got != "playlists 0,albums 0" {
 		t.Fatalf("expanding ALBUMS must fetch the first page lazily, made [%s]", got)
@@ -562,7 +576,7 @@ func TestSavedAlbumsSectionRendersAndPagesLazily(t *testing.T) {
 		w, h := size[0], size[1]
 		wm, _ := newRealModel(t, w, h, f)
 		loadPlaylistsReady(t, wm)
-		wm.cursor = len(wm.visibleRows()) - 1
+		wm.cursor = len(wm.visibleRows()) - 2 // the ALBUMS header, SAVED collapsed below
 		pressRun(t, wm, "l")
 		for i, line := range lines(wm) {
 			if lw := visibleWidth(line); lw > w {
@@ -584,9 +598,9 @@ func TestSavedAlbumOpensItsTracksAndPlays(t *testing.T) {
 	m, pl := newRealModel(t, 180, 50, f)
 	loadPlaylistsReady(t, m)
 
-	m.cursor = len(m.visibleRows()) - 1
-	pressRun(t, m, "l") // expand albums, first page lands
-	pressRun(t, m, "j") // onto the album row
+	m.cursor = len(m.visibleRows()) - 2 // the ALBUMS header, SAVED collapsed below
+	pressRun(t, m, "l")                 // expand albums, first page lands
+	pressRun(t, m, "j")                 // onto the album row
 	pressRun(t, m, "enter")
 
 	if m.section != SectionTracks || m.sView {

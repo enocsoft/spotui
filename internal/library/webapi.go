@@ -237,6 +237,56 @@ func releaseYear(date string) string {
 	return date
 }
 
+// --- GET /v1/me/tracks (T29: the SAVED group — the user's saved songs) ---
+
+// SavedTracks fetches one page of the user's saved songs over the same Web
+// API token as playlists and saved albums: 50 per page, offset pagination,
+// `next` followed lazily. The saved-track object wraps the track one level
+// down; the row keeps the facts the track table renders and drops added_at —
+// the table has no ADDED column where no view carries dates (S27). Every
+// mapped row is saved by definition: this list IS the saved set.
+func (w *WebAPI) SavedTracks(ctx context.Context, offset int) (SavedTracksPage, error) {
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(playlistPageLimit))
+	q.Set("offset", strconv.Itoa(offset))
+	body, err := w.call(ctx, "GET", "v1/me/tracks", q)
+	if err != nil {
+		return SavedTracksPage{}, err
+	}
+	var raw struct {
+		Total int `json:"total"`
+		Items []struct {
+			Track struct {
+				ID      string `json:"id"`
+				Name    string `json:"name"`
+				Artists []struct {
+					Name string `json:"name"`
+				} `json:"artists"`
+				Album struct {
+					Name string `json:"name"`
+				} `json:"album"`
+				DurationMs int64 `json:"duration_ms"`
+			} `json:"track"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return SavedTracksPage{}, fmt.Errorf("decoding saved tracks: %w", err)
+	}
+	page := SavedTracksPage{Offset: offset, Total: raw.Total}
+	for _, it := range raw.Items {
+		page.Tracks = append(page.Tracks, Track{
+			ID:       it.Track.ID,
+			Title:    it.Track.Name,
+			Artist:   joinArtists(it.Track.Artists),
+			Album:    it.Track.Album.Name,
+			Duration: time.Duration(it.Track.DurationMs) * time.Millisecond,
+			Saved:    true,
+		})
+	}
+	page.NextOffset = nextOffset(offset, playlistPageLimit, raw.Total)
+	return page, nil
+}
+
 // --- playlist and album contents via the playback resolver ---
 
 // Items resolves the playlist's contents the way playback does
