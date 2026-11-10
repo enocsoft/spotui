@@ -274,7 +274,7 @@ func (m *Model) execCommand() tea.Cmd {
 	case "play", ":play":
 		id, err := library.ParseTrackID(rest)
 		if err != nil {
-			return m.setToast("✗ :play expects a spotify:track: URI or a 22-char track id")
+			return m.setToast("✗ :play wants a track id, spotify:track:<id> or a pasted open.spotify.com link")
 		}
 		if err := m.player.Play(library.Track{ID: id}); err != nil {
 			return m.setToast("✗ " + err.Error())

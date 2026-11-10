@@ -151,8 +151,18 @@ func ParseTrackID(target string) (string, error) {
 	t = strings.Trim(t, "\"'`")
 	t = strings.TrimSpace(t)
 	t = strings.TrimPrefix(t, "spotify:track:")
+	// Pasted links are the normal case: the share button gives something like
+	// https://open.spotify.com/track/<id>?si=... and sometimes carries an /intl-xx/
+	// segment. Keep the segment after "track/", then cut the query or fragment.
+	if i := strings.Index(t, "track/"); i >= 0 {
+		t = t[i+len("track/"):]
+	}
+	if j := strings.IndexAny(t, "?#"); j >= 0 {
+		t = t[:j]
+	}
+	t = strings.TrimSuffix(strings.TrimSpace(t), "/")
 	if len(t) != trackIDLen || strings.Trim(t, base62) != "" {
-		return "", fmt.Errorf("not a Spotify track id: %q", target)
+		return "", fmt.Errorf("not a Spotify track id: %q — use spotify:track:<id> or paste an open.spotify.com/track link", target)
 	}
 	return t, nil
 }
