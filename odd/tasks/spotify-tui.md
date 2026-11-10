@@ -28,6 +28,9 @@ S17. Alcance no oficial, declarado: un cliente librespot no es una integración 
 S18. Vistas persistentes = sólo dos: **Tracks** (la lista abierta: playlist, álbum o resultado) y **Playlists** (navegación). Textual: «que las view sean tracks playlist». (L13)
 S19. Search, el palette de comandos, el selector de salida y la ayuda son **ventanas flotantes**: borde cerrado en `surface`, una a la vez, abiertas por su tecla y cerradas con `esc`, sin cambiar la fila de secciones ni la franja de contexto. Textual: «queque search y eso sean ventanas flotantess como en enn canva». (L13)
 
+S20. El login lo hace **la app**, con Authorization Code + **PKCE** contra `https://accounts.spotify.com/authorize` y el redirect ya registrado `http://127.0.0.1:8888/login`; el token resultante se entrega a la sesión con `session.SpotifyTokenCredentials{Username, Token}` más el `ClientId` del dashboard. El login interactivo de la librería (`InteractiveCredentials`, que emite `response_type=token`) está **prohibido**: Spotify eliminó el implicit grant el 2025-11-27 y el navegador responde «response_type must be code». (L21)
+S21. La app **no puede inferir Premium**: `GET /v1/me` dejó de devolver `product` para apps nuevas en Development Mode (S14). Ningún mensaje debe afirmar la suscripción del usuario; se informa que el servidor rechazó la sesión y se listan causas posibles. (L21)
+
 ## Tasks
 
 | ID | Qué | Specs | Ruta | Commit |
@@ -45,6 +48,7 @@ S19. Search, el palette de comandos, el selector de salida y la ayuda son **vent
 | T12 | Ventanas flotantes reales: search, palette, output picker y ayuda con borde cerrado y centrado, en vez de renderizar en el lugar de la lista | S19 | entregado | — |
 | T13 | `:play <spotify:track:ID>` en el palette para poder escuchar hoy, antes del catálogo real | S1, S16 | entregado | — |
 | T14 | README: declarar que es un cliente no oficial (S17) y que **CGO_ENABLED=0 no compila** | S17 | entregado | — |
+| T15 | PKCE propio: verifier/challenge S256, servidor local en `/login`, exchange de código, refresh y cache 0600 en el state dir; el token se pasa a la sesión con `SpotifyTokenCredentials` | S20, S21 | pendiente | — |
 
 ## Log
 
@@ -95,3 +99,5 @@ L18 (ajuste de diseño derivado del código): DESIGN.md decía que el palette mi
 L19 (T14 entregado): `README.md` en la raíz declara el cliente como **no oficial** y de uso personal no comercial (S17), el requisito de Premium, el aviso de que `CGO_ENABLED=0` no compila, el setup exacto del dashboard (redirect `http://127.0.0.1:8888/login`, no `localhost`), el formato de `config.toml`, la tabla de teclas y el estado honesto: biblioteca mock, `:play` para escuchar hoy.
 
 L20 (bug de arranque, primera corrida real): `✗ failed obtaining client token: clienttoken exchange rejected: status=400 content-length=0`. Causa raíz: pasábamos el client id del dashboard como `session.Options.ClientId`, y la doc de esa opción dice "If empty, the default librespot client ID is used". Una app del dashboard está registrada para el flujo de autorización de la Web API, no para el exchange de client token de librespot, así que el exchange devuelve 400 con cuerpo vacío. Fix: `ClientId: ""` en la sesión (librespot usa el suyo); el client id configurado queda para la Web API (T7). Segundo fix del mismo incidente: la vista de error afirmaba "librespot needs Spotify Premium" ante **cualquier** falla de arranque, lo que manda a la gente por el camino equivocado; ahora muestra el error real y nombra causas posibles sin afirmar. Protegido con `TestPlayerErrorViewDoesNotAssumePremium`. Pendiente de confirmar con el usuario: si la cuenta es Premium (si es Free, el fallo es real y no hay fix).
+
+L21 (segundo bloqueante real, reportado por el usuario): al abrir la URL de login, el navegador devuelve «response_type must be code». Causa: el login interactivo de go-librespot emite una URL con `response_type=token` (implicit grant), flujo que Spotify eliminó el 27 de noviembre de 2025 — el mismo recorte que ya estaba anotado en L7 para redirect URIs. `session.InteractiveCredentials` sólo expone `CallbackPort`, así que no hay forma de pedirle el flujo correcto: el login pasa a ser responsabilidad nuestra (S20, T15). El único puente que la librería ofrece es `SpotifyTokenCredentials{Username, Token}`, documentado en su `docs/embedding.md` como "single auth flow". Consecuencia adicional: sin `product` en `/v1/me` (S14), el chequeo de Premium del adapter ya no puede afirmar nada (S21).
