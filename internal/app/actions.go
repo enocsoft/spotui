@@ -102,7 +102,7 @@ func (m Model) visibleRows() []row {
 		}
 		return rows
 	}
-	tracks := m.tracksForView()
+	tracks := m.orderedTracks()
 	rows := make([]row, len(tracks))
 	for i, t := range tracks {
 		rows[i] = row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)}
@@ -157,6 +157,7 @@ func (m *Model) onEnter() tea.Cmd {
 			m.section = SectionTracks
 			m.cursor = 0
 			m.listOffset = 0
+			m.rebuildShuffle()
 			return nil
 		}
 		if r.kind == rowHeader {
@@ -191,6 +192,11 @@ func (m *Model) onPause() tea.Cmd {
 }
 
 func (m *Model) onNext() tea.Cmd {
+	// Shuffle on: our order owns playback — walk the shuffled list instead of
+	// asking the session to advance its own context (T21).
+	if cmd, ok := m.shuffleStep(1); ok {
+		return cmd
+	}
 	if err := m.player.Next(); err != nil {
 		return m.setToast("✗ " + err.Error())
 	}
@@ -201,6 +207,10 @@ func (m *Model) onNext() tea.Cmd {
 }
 
 func (m *Model) onPrev() tea.Cmd {
+	// Shuffle on: walk the shuffled list backwards (T21).
+	if cmd, ok := m.shuffleStep(-1); ok {
+		return cmd
+	}
 	if err := m.player.Prev(); err != nil {
 		return m.setToast("✗ " + err.Error())
 	}
@@ -272,6 +282,7 @@ func (m *Model) onToggle() tea.Cmd {
 func (m *Model) onEsc() tea.Cmd {
 	if m.sView {
 		m.sView = false
+		m.rebuildShuffle() // back to the previous section view: rebuild
 		m.clampCursor()
 		m.syncScroll()
 		return nil
@@ -279,6 +290,7 @@ func (m *Model) onEsc() tea.Cmd {
 	if m.section == SectionTracks {
 		m.section = SectionPlaylists
 		m.cursor, m.listOffset = 0, 0
+		m.rebuildShuffle()
 		if m.fetch != nil {
 			return m.ensurePlaylistsLoaded()
 		}

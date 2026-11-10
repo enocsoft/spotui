@@ -144,6 +144,15 @@ type Model struct {
 	// pendingSaved holds saved toggles in flight: the cell answers only when
 	// the server does (Mirror Rule); on failure nothing to revert, just toast.
 	pendingSaved map[string]bool
+
+	// Shuffle (T21): `s` toggles shuffle over the open view's playable rows.
+	// Our order owns playback: while it is on, the list and the drawer render
+	// in the shuffled order and n/p walk it. shuffleOrd maps visible position
+	// -> base index and is rebuilt on every view change; perm is the
+	// injectable permutation generator (seeded, so tests are deterministic).
+	shuffleOn  bool
+	shuffleOrd []int
+	perm       func(n int, seed int64) []int
 }
 
 // New builds the model. data and player are interfaces backed by mock data
@@ -160,6 +169,7 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 		clock:        clock,
 		expanded:     map[string]bool{"PLAYLISTS": true},
 		pendingSaved: map[string]bool{},
+		perm:         seededPerm,
 	}
 	// Real mode: the player exposes the Web API catalog (T7) and the app starts
 	// on the playlists navigation. Mock mode keeps the artboard's open list.
@@ -319,6 +329,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.onNext()
 	case "p":
 		return m, m.onPrev()
+	case "s":
+		return m, m.onShuffle()
 	case "+", "=":
 		return m, m.onVolume(1)
 	case "-":
@@ -327,6 +339,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.section = sections[(int(m.section)+1)%len(sections)]
 		m.cursor = 0
 		m.listOffset = 0
+		m.rebuildShuffle()
 		if m.section == SectionPlaylists {
 			cmd = m.ensurePlaylistsLoaded()
 		}
@@ -461,6 +474,11 @@ func (m *Model) closeWindow(restore bool) {
 	}
 	if k == winSearch && restore {
 		m.filter = ""
+	}
+	if k == winSearch {
+		// The filter narrows the open list (mock mode): a narrowed list is a
+		// different view for shuffle.
+		m.rebuildShuffle()
 	}
 	if k == winPalette {
 		m.cmdInput = ""

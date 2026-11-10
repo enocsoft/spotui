@@ -582,6 +582,13 @@ func (m Model) drawerHead(w int) string {
 // drawerRows: up next only; the player bar owns the current track (S4).
 func (m Model) drawerRows(w int) []string {
 	q := m.data.Queue()
+	if m.shuffleOn {
+		// Shuffle on: the drawer mirrors the shuffled order — the same walk
+		// `n` takes (T21).
+		if up := m.shuffleUpNext(); len(up) > 0 {
+			q = up
+		}
+	}
 	if len(q) > drawerRow {
 		q = q[:drawerRow]
 	}
@@ -653,7 +660,7 @@ func (m Model) playerBar(w int) []string {
 		padRight(mid, midBudget) + output
 
 	mode := "shuffle off · repeat " + s.Repeat
-	if s.Shuffle {
+	if m.shuffleOn {
 		mode = "shuffle on · repeat " + s.Repeat
 	}
 	vol := m.volumeCell(s.Volume)

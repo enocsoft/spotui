@@ -73,7 +73,7 @@ type winSpec struct {
 // status bar and the `?` help window render the same table.
 var keyHintsTable = [][2]string{
 	{"j/k", "move"}, {"enter", "play"}, {"a", "queue"}, {"space", "pause"},
-	{"n/p", "track"}, {"+/-", "volume"}, {"tab", "view"}, {"q", "drawer"},
+	{"n/p", "track"}, {"s", "shuffle"}, {"+/-", "volume"}, {"tab", "view"}, {"q", "drawer"},
 	{"esc", "back"}, {"/", "search"}, {":", "cmd"}, {"d", "output"},
 }
 

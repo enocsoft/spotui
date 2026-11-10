@@ -137,6 +137,7 @@ func (m *Model) applyItems(msg itemsMsg) {
 	m.plNext = msg.page.NextOffset
 	// What the bounded resolver could not show — footnoted, never silent.
 	m.plSkipped, m.plTruncated = msg.page.Skipped, msg.page.Truncated
+	m.rebuildShuffle() // new playable rows landed: re-permute over them
 	m.clampCursor()
 }
 
@@ -162,6 +163,7 @@ func (m *Model) applySearch(msg searchMsg) {
 	}
 	m.sTotals = msg.page.Totals
 	m.sNext = msg.page.NextOffset
+	m.rebuildShuffle() // new result rows landed: re-permute over them
 	m.clampCursor()
 }
 
@@ -297,6 +299,7 @@ func (m *Model) openPlaylist(s library.PlaylistSummary) tea.Cmd {
 		m.plTotal = 0
 	}
 	m.plItemsLoading, m.iPending = true, 0
+	m.rebuildShuffle() // the view changed: the old permutation is void
 	return m.itemsCmd(s.ID, 0)
 }
 
@@ -311,6 +314,7 @@ func (m *Model) startSearch(query string) tea.Cmd {
 	m.sTracks, m.sAlbums, m.sPlaylists = nil, nil, nil
 	m.sView = true
 	m.cursor, m.listOffset = 0, 0
+	m.rebuildShuffle() // the view changed: the old permutation is void
 	return m.searchCmd(0)
 }
 
@@ -404,7 +408,7 @@ func (m Model) errorStatusRow(err error) row {
 }
 
 func (m Model) trackRows() []row {
-	tracks := m.realTracksForView()
+	tracks := m.orderedTracks()
 	rows := make([]row, 0, len(tracks)+2)
 	switch {
 	case m.section == SectionTracks && m.plID == "":
@@ -461,13 +465,6 @@ func (m Model) appendPlaylistStatus(rows []row, n int) []row {
 	}
 }
 
-func (m Model) realTracksForView() []library.Track {
-	if m.section == SectionTracks {
-		return m.plTracks
-	}
-	return nil
-}
-
 // searchResultRows is the transient results view (T19): type-grouped,
 // tracks first, then albums, then playlists — the way the list already
 // renders its groups — with the panel states in place: loading, the empty
@@ -487,7 +484,7 @@ func (m Model) searchResultRows() []row {
 	}
 	if len(m.sTracks) > 0 {
 		rows = append(rows, row{kind: rowHeader, text: "TRACKS", count: len(m.sTracks)})
-		for i, t := range m.sTracks {
+		for i, t := range m.orderedTracks() {
 			rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)})
 		}
 	}
