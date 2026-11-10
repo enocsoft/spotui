@@ -16,10 +16,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/nahuel/spotify-tui/internal/config"
-	"github.com/nahuel/spotify-tui/internal/library"
-	"github.com/nahuel/spotify-tui/internal/library/mock"
-	"github.com/nahuel/spotify-tui/internal/ui/theme"
+	"github.com/nahuel/spotui/internal/config"
+	"github.com/nahuel/spotui/internal/library"
+	"github.com/nahuel/spotui/internal/library/mock"
+	"github.com/nahuel/spotui/internal/ui/theme"
 )
 
 const (
@@ -1286,7 +1286,7 @@ func TestMockModeHasNoCatalog(t *testing.T) {
 	data := mock.New()
 	m := New(config.Config{ClientID: "c", CallbackPort: 8888}, data, data, testClock)
 	if m.fetch != nil {
-		t.Error("SPOTIFY_TUI_MOCK=1 must keep the mock data source: no catalog fetch")
+		t.Error("SPOTUI_MOCK=1 must keep the mock data source: no catalog fetch")
 	}
 	if m.section != SectionTracks {
 		t.Error("mock mode keeps the artboard start inside the open track list")

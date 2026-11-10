@@ -1,4 +1,4 @@
-module github.com/nahuel/spotify-tui
+module github.com/nahuel/spotui
 
 go 1.27.3
 

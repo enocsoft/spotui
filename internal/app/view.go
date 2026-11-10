@@ -2,15 +2,15 @@ package app
 
 import (
 	"fmt"
-	"github.com/nahuel/spotify-tui/internal/config"
+	"github.com/nahuel/spotui/internal/config"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/nahuel/spotify-tui/internal/library"
-	"github.com/nahuel/spotify-tui/internal/ui/theme"
+	"github.com/nahuel/spotui/internal/library"
+	"github.com/nahuel/spotui/internal/ui/theme"
 )
 
 // Mock chrome until slice 2 wires the real account (artboard copy).
@@ -206,7 +206,7 @@ func (m Model) loginView() string {
 		theme.MetaStyle.Render("the callback lands on "+loginCallbackURL(m.cfg.CallbackPort)+
 			" — playback starts when you return"),
 		"",
-		theme.MetaStyle.Render("build "+Revision()),
+		theme.MetaStyle.Render(VersionString()),
 		theme.LabelStyle.Render("o open in browser · ctrl+c quit"),
 	)
 	return m.messageView(lines)
@@ -257,14 +257,14 @@ func (m Model) playerErrorView() string {
 		"",
 		theme.MetaStyle.Render("usual causes: an account without Premium, or stale credentials in the state dir"),
 		"",
-		theme.MetaStyle.Render("build " + Revision()),
+		theme.MetaStyle.Render(VersionString()),
 		theme.LabelStyle.Render("ctrl+c quit"),
 	})
 }
 
 func (m Model) refusalView() string {
 	lines := []string{
-		"spotify-tui needs at least 80 columns.",
+		"spotui needs at least 80 columns.",
 		"",
 		"resize the terminal, or press q to quit.",
 		"tab view · q drawer · : cmd · ? help",
@@ -975,7 +975,7 @@ func (m Model) connectingView() string {
 		"",
 		theme.MetaStyle.Render("if this stays here, the log is " + config.StateDir() + "/player.log"),
 		"",
-		theme.MetaStyle.Render("build " + Revision()),
+		theme.MetaStyle.Render(VersionString()),
 		theme.LabelStyle.Render("ctrl+c quit"),
 	})
 }

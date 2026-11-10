@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotify-tui/internal/config"
-	"github.com/nahuel/spotify-tui/internal/library"
-	"github.com/nahuel/spotify-tui/internal/library/mock"
+	"github.com/nahuel/spotui/internal/config"
+	"github.com/nahuel/spotui/internal/library"
+	"github.com/nahuel/spotui/internal/library/mock"
 )
 
 var testClock = func() time.Time { return time.Date(2026, 1, 1, 12, 4, 0, 0, time.UTC) }

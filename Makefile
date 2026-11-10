@@ -1,16 +1,16 @@
-# spotify-tui
+# spotui
 #
 # CGO is required (the FLAC decoder has no pure-Go fallback), so every target that
 # builds keeps it on explicitly instead of relying on the default.
 
-BIN     := spotify-tui
+BIN     := spotui
 PREFIX  ?= $(HOME)/.local
 BINDIR  := $(PREFIX)/bin
-PKG     := ./cmd/spotify-tui
+PKG     := ./cmd/spotui
 
 .PHONY: build install run test check fmt clean
 
-build: ## compile into ./spotify-tui
+build: ## compile into ./spotui
 	CGO_ENABLED=1 go build -o $(BIN) $(PKG)
 
 install: ## build and install into $(PREFIX)/bin (default ~/.local/bin)

@@ -7,7 +7,7 @@ import (
 
 	"github.com/jfreymuth/pulse"
 
-	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotui/internal/library"
 )
 
 // listPulseSinks connects to the local PulseAudio/PipeWire server and lists

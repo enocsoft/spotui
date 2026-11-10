@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotui/internal/library"
 )
 
 // savedGroupFixtures serves one playlist page plus two saved-track pages

@@ -265,26 +265,26 @@ func callbackHandler(state string, results chan<- callbackResult) http.Handler {
 		if e := q.Get("error"); e != "" {
 			report(callbackResult{err: fmt.Errorf("authorization was denied (%s)", e)})
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, "spotify-tui: authorization was denied — you can close this tab.")
+			fmt.Fprint(w, "spotui: authorization was denied — you can close this tab.")
 			return
 		}
 		if got := q.Get("state"); got != state {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, "spotify-tui: state mismatch — this tab is not the login you started.")
+			fmt.Fprint(w, "spotui: state mismatch — this tab is not the login you started.")
 			return
 		}
 		code := q.Get("code")
 		if code == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, "spotify-tui: the redirect carried no authorization code.")
+			fmt.Fprint(w, "spotui: the redirect carried no authorization code.")
 			return
 		}
 		if !report(callbackResult{code: code}) {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "spotify-tui: login already completed.")
+			fmt.Fprint(w, "spotui: login already completed.")
 			return
 		}
-		fmt.Fprint(w, "spotify-tui: login complete — you can close this tab.")
+		fmt.Fprint(w, "spotui: login complete — you can close this tab.")
 	})
 }
 

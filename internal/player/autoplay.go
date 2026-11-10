@@ -15,7 +15,7 @@ import (
 	playerpb "github.com/elxgy/go-librespot/proto/spotify/player"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotui/internal/library"
 )
 
 // autoplayTimeout bounds one ContextResolveAutoplay call: a hung resolve must

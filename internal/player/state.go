@@ -11,7 +11,7 @@ import (
 
 	libplayer "github.com/elxgy/go-librespot/player"
 
-	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotui/internal/library"
 )
 
 // libplayerMaxVolume is go-librespot's 0..65535 volume scale.

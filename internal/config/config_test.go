@@ -88,7 +88,7 @@ func TestDefaultPathUsesXDG(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	got := DefaultPath()
-	want := filepath.Join(dir, "spotify-tui", "config.toml")
+	want := filepath.Join(dir, "spotui", "config.toml")
 	if got != want {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
 	}
@@ -139,8 +139,92 @@ func TestStateDirUsesXDG(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", dir)
 	got := StateDir()
-	want := filepath.Join(dir, "spotify-tui")
+	want := filepath.Join(dir, "spotui")
 	if got != want {
 		t.Errorf("StateDir() = %q, want %q", got, want)
+	}
+}
+
+// TestLoadFallsBackToLegacyConfigDir: after the spotui rename an existing
+// install still has its client_id under ~/.config/spotify-tui. When the new
+// spotui config dir does not exist and the legacy one does, the legacy file
+// is read and the fallback is reported so main can print one notice line.
+func TestLoadFallsBackToLegacyConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	legacyDir := filepath.Join(dir, "spotify-tui")
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+	legacyPath := writeFile(t, legacyDir, "config.toml", "client_id = \"abc123\"\n")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load with only the legacy config dir present: %v", err)
+	}
+	if cfg.ClientID != "abc123" {
+		t.Errorf("ClientID = %q, want %q read from the legacy file", cfg.ClientID, "abc123")
+	}
+	if got := LegacyConfigPath(); got != legacyPath {
+		t.Errorf("LegacyConfigPath() = %q, want the legacy file %q actually used", got, legacyPath)
+	}
+}
+
+// TestDefaultPathPrefersNewDirWhenBothExist: the compatibility path is one-time.
+// Once the spotui dir exists it wins, even if the legacy dir is still around.
+func TestDefaultPathPrefersNewDirWhenBothExist(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	for _, name := range []string{"spotui", "spotify-tui"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	writeFile(t, filepath.Join(dir, "spotify-tui"), "config.toml", "client_id = \"legacy\"\n")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected the missing spotui config file error, got nil")
+	}
+	if !strings.Contains(err.Error(), filepath.Join(dir, "spotui", "config.toml")) {
+		t.Errorf("error %q should name the new spotui path, not the legacy one", err)
+	}
+	if got := LegacyConfigPath(); got != "" {
+		t.Errorf("LegacyConfigPath() = %q, want empty when the new dir exists", got)
+	}
+}
+
+// TestStateDirFallsBackToLegacyStateDir: token caches live in the state dir.
+// When the new spotui state dir does not exist and the legacy one does, the
+// legacy dir is used so an existing token cache keeps working.
+func TestStateDirFallsBackToLegacyStateDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	legacyDir := filepath.Join(dir, "spotify-tui")
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+	if got := StateDir(); got != legacyDir {
+		t.Errorf("StateDir() = %q, want the legacy dir %q", got, legacyDir)
+	}
+	if got := LegacyStateDir(); got != legacyDir {
+		t.Errorf("LegacyStateDir() = %q, want the legacy dir actually used", got)
+	}
+}
+
+// TestStateDirPrefersNewWhenBothExist: the new spotui state dir wins once it
+// exists; the legacy fallback never resurrects old state over new state.
+func TestStateDirPrefersNewWhenBothExist(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	for _, name := range []string{"spotui", "spotify-tui"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	want := filepath.Join(dir, "spotui")
+	if got := StateDir(); got != want {
+		t.Errorf("StateDir() = %q, want the new dir %q", got, want)
+	}
+	if got := LegacyStateDir(); got != "" {
+		t.Errorf("LegacyStateDir() = %q, want empty when the new dir exists", got)
 	}
 }

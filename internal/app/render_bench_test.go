@@ -11,8 +11,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotify-tui/internal/config"
-	"github.com/nahuel/spotify-tui/internal/library/mock"
+	"github.com/nahuel/spotui/internal/config"
+	"github.com/nahuel/spotui/internal/library/mock"
 )
 
 func benchModel(b *testing.B, w, h int) Model {

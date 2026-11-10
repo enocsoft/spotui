@@ -1,4 +1,4 @@
-# spotify-tui
+# spotui
 
 A terminal player for Spotify that **plays locally**: the audio comes out of this machine through an
 embedded Spotify session. No Spotify app, no phone, no Connect device to transfer.
@@ -31,13 +31,25 @@ accounts, and Spotify refuses to play without an active subscription.
 
 ## Install
 
-Three ways, depending on what you want:
+With `go`:
+
+```sh
+go install github.com/nahuel/spotui/cmd/spotui@latest
+```
+
+Or from a checkout of this repository:
+
+```sh
+go install ./cmd/spotui   # into $(go env GOPATH)/bin
+make install              # into ~/.local/bin/spotui
+```
 
 | You want | Command |
 | --- | --- |
-| Try it from the worktree | `go run ./cmd/spotify-tui` |
-| Keep it in your PATH | `make install` (installs to `~/.local/bin/spotify-tui`) |
-| Build a file you can move | `make build` (writes `./spotify-tui`) |
+| Try it from the worktree | `go run ./cmd/spotui` |
+| Keep it in your PATH | `make install` (installs to `~/.local/bin/spotui`) |
+| Build a file you can move | `make build` (writes `./spotui`) |
+| Say which binary you run | `spotui -version` prints `spotui 1.0.0 (<revision>)` |
 
 `make check` runs what CI would: format, vet, tests and a CGO build. `make test` runs the
 suite alone.
@@ -45,6 +57,18 @@ suite alone.
 The binary is a normal dynamic executable: it links against the system audio libraries
 (`libasound`, `libpulse`) and the FLAC decoder, so copying it to another machine needs
 those packages there. Building it there from source is usually simpler than shipping it.
+
+### Upgrading from the `spotify-tui` name
+
+One-time and automatic: if `~/.config/spotui/` does not exist but the old
+`~/.config/spotify-tui/` does, the old config file is still read (and the same applies to the
+state dir with your token cache), with one notice line telling you where to move it. Nothing to
+do unless you want the notice gone:
+
+```sh
+mv ~/.config/spotify-tui ~/.config/spotui
+mv ~/.local/state/spotify-tui ~/.local/state/spotui
+```
 
 ## Requirements
 
@@ -64,12 +88,12 @@ librespot's own client id, the same identity `ncspot` and `spotifyd` use.
 1. Run it:
 
    ```sh
-   go run ./cmd/spotify-tui
+   go run ./cmd/spotui
    ```
 
 2. The first run shows a **login required** screen with the authorization URL, wrapped over several
-   lines, and saves the same URL verbatim to `$XDG_STATE_HOME/spotify-tui/login-url.txt` (usually
-   `~/.local/state/spotify-tui/login-url.txt`). Open it, approve, and the app picks up the callback on
+   lines, and saves the same URL verbatim to `$XDG_STATE_HOME/spotui/login-url.txt` (usually
+   `~/.local/state/spotui/login-url.txt`). Open it, approve, and the app picks up the callback on
    `127.0.0.1:8888/login`. Credentials are cached in the state dir with `0600` permissions, so this
    happens once.
 
@@ -77,7 +101,7 @@ librespot's own client id, the same identity `ncspot` and `spotifyd` use.
    callback is single-use.
 
 3. Optional, only for the library and search slice: `client_id` in
-   `~/.config/spotify-tui/config.toml` names a Spotify dashboard app used for Web API calls, and that
+   `~/.config/spotui/config.toml` names a Spotify dashboard app used for Web API calls, and that
    app needs `http://127.0.0.1:8888/login` registered as a redirect URI (loopback **IP literal**;
    `localhost` is rejected by Spotify). Playback does not use it.
 
@@ -130,7 +154,7 @@ Every item below cost a real debugging session, in this order.
 
 | Symptom | Cause and fix |
 | --- | --- |
-| Spotify says `response_type must be code` | A binary built before the PKCE login. The login screen prints `build <revision>` at the bottom: if it is missing or old, rebuild and run again. |
+| Spotify says `response_type must be code` | A binary built before the PKCE login. The login screen prints `spotui <version> (<revision>)` at the bottom: if the revision is missing or old, rebuild and run again. |
 | The browser says "login complete" and the terminal never moves | The session failed and the error was hidden behind the login screen. Update: failures outrank the login state since `dc5f9f8`. |
 | `failed exchanging oauth2 code: "code must be supplied"` | Something touched `127.0.0.1:<port>/login` before the real redirect (a restored tab, a reload, a favicon request). The callback is single-use: close old tabs, open the authorization URL in a fresh one and do not reload the callback page. |
 | `unknown credentials: *session.SpotifyTokenCredentials` | A credentials value passed by pointer. Fixed; the library type-switches on the concrete type. |
@@ -140,7 +164,7 @@ Every item below cost a real debugging session, in this order.
 | `CGO_ENABLED=0 go build` fails | Expected: the FLAC decoder has no pure-Go fallback. Build with CGO on. |
 | The build revision has `+dirty` | The binary was built from a worktree with uncommitted changes. Fine for development, useless as a bug report. |
 
-The player log lives in `$XDG_STATE_HOME/spotify-tui/player.log` and redacts token-shaped runs, so it is
+The player log lives in `$XDG_STATE_HOME/spotui/player.log` and redacts token-shaped runs, so it is
 safe to paste. It is the first place to look when audio does not start.
 
 ## Development
@@ -150,7 +174,7 @@ gofmt -l cmd internal
 go vet ./...
 go test -count=1 ./...
 CGO_ENABLED=1 go build ./...     # CGO is required
-SPOTIFY_TUI_MOCK=1 go run ./cmd/spotify-tui   # offline shell, no credentials needed
+SPOTUI_MOCK=1 go run ./cmd/spotui   # offline shell, no credentials needed
 ```
 
 The test suite needs no Spotify account and no network: it covers layout widths at 180, 140 and 80

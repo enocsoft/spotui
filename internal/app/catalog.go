@@ -13,8 +13,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nahuel/spotify-tui/internal/library"
-	"github.com/nahuel/spotify-tui/internal/ui/theme"
+	"github.com/nahuel/spotui/internal/library"
+	"github.com/nahuel/spotui/internal/ui/theme"
 )
 
 // statusKind is the panel state a rowStatus row carries (DESIGN §7: loading,

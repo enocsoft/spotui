@@ -1,4 +1,4 @@
-// Package theme holds every visual token of spotify-tui.
+// Package theme holds every visual token of spotui.
 //
 // Source of truth: design/DESIGN.md (frontmatter colors, roles and glyphs).
 // No view may write a hex literal or an ad-hoc style; everything goes through

@@ -11,9 +11,9 @@ import (
 	librespot "github.com/elxgy/go-librespot"
 	libplayer "github.com/elxgy/go-librespot/player"
 	"github.com/elxgy/go-librespot/session"
-	"github.com/nahuel/spotify-tui/internal/auth"
-	"github.com/nahuel/spotify-tui/internal/config"
-	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotui/internal/auth"
+	"github.com/nahuel/spotui/internal/config"
+	"github.com/nahuel/spotui/internal/library"
 )
 
 func TestSortSinksActiveFirstBlockedLast(t *testing.T) {

@@ -6,15 +6,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/nahuel/spotify-tui/internal/config"
+	"github.com/nahuel/spotui/internal/config"
 )
 
-// debugf appends to <state>/debug.log only when SPOTIFY_TUI_DEBUG is set. It
+// debugf appends to <state>/debug.log only when SPOTUI_DEBUG is set. It
 // exists because the interesting failures happen in the state machine, not on
 // screen: writing to stderr would corrupt the frame, and guessing costs more
 // than one log line per tick.
 func debugf(format string, args ...any) {
-	if os.Getenv("SPOTIFY_TUI_DEBUG") == "" {
+	if os.Getenv("SPOTUI_DEBUG") == "" && os.Getenv("SPOTIFY_TUI_DEBUG") == "" {
 		return
 	}
 	dir := config.StateDir()

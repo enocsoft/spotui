@@ -7,7 +7,7 @@ import (
 
 	libplayer "github.com/elxgy/go-librespot/player"
 
-	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotui/internal/library"
 )
 
 // bitrateKbps is the stream quality requested from Spotify (OGG Vorbis

@@ -56,7 +56,7 @@ func (l *captureLogger) writef(format string, args ...any) {
 	if l.fields != "" {
 		msg = l.fields + " " + msg
 	}
-	fmt.Fprintf(l.w, "spotify-tui: %s\n", msg)
+	fmt.Fprintf(l.w, "spotui: %s\n", msg)
 }
 
 func (l *captureLogger) Tracef(format string, args ...any) { l.writef("trace: "+format, args...) }

@@ -2,6 +2,18 @@ package app
 
 import "runtime/debug"
 
+// Version is the release version. It prints with -version / --version and
+// sits next to the build revision on every screen that names the build, so
+// a bug report says exactly which binary produced it.
+const Version = "1.0.0"
+
+// VersionString is the identity line: name, release version and the short
+// build revision. It is printed by -version and rendered on the login,
+// error and connecting screens where "build <revision>" used to appear.
+func VersionString() string {
+	return "spotui " + Version + " (" + Revision() + ")"
+}
+
 // Revision reports the VCS revision the binary was built from, shortened to
 // seven characters and marked when the worktree had local changes. It returns
 // "dev" when the build carries no VCS metadata.

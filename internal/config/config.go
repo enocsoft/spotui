@@ -1,7 +1,7 @@
-// Package config loads the spotify-tui XDG configuration file.
+// Package config loads the spotui XDG configuration file.
 //
-// The file lives at $XDG_CONFIG_HOME/spotify-tui/config.toml and must at
-// least carry the Spotify app client_id (ncspot-style local config, spec S9).
+// The file lives at $XDG_CONFIG_HOME/spotui/config.toml and must at least
+// carry the Spotify app client_id (ncspot-style local config, spec S9).
 package config
 
 import (
@@ -30,36 +30,104 @@ type Config struct {
 // not set callback_port.
 const DefaultCallbackPort = 8888
 
-// DefaultPath returns the XDG config path for spotify-tui:
-// $XDG_CONFIG_HOME/spotify-tui/config.toml.
-func DefaultPath() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
+func xdgDir(envVar, fallback string) string {
+	base := os.Getenv(envVar)
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			base = "."
 		} else {
-			base = filepath.Join(home, ".config")
+			base = filepath.Join(home, fallback)
 		}
 	}
-	return filepath.Join(base, "spotify-tui", "config.toml")
+	return base
 }
 
-// StateDir returns the XDG state directory for spotify-tui:
-// $XDG_STATE_HOME/spotify-tui. The device id and the persisted Spotify
+func dirExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ConfigDir returns the spotui XDG config directory:
+// $XDG_CONFIG_HOME/spotui. Unlike DefaultPath it never applies the legacy
+// fallback, so it names the destination when the user wants to migrate.
+func ConfigDir() string {
+	return filepath.Join(xdgDir("XDG_CONFIG_HOME", ".config"), "spotui")
+}
+
+// DefaultPath returns the XDG config path for spotui:
+// $XDG_CONFIG_HOME/spotui/config.toml.
+//
+// One-time rename compatibility: when the spotui config dir does not exist
+// and the pre-rename spotify-tui dir does, the legacy config file is used
+// instead and LegacyConfigPath reports it, so an existing install keeps
+// working instead of silently asking to log in again.
+func DefaultPath() string {
+	path, _ := resolveConfigPath()
+	return path
+}
+
+// LegacyConfigPath reports the pre-rename spotify-tui config file that
+// DefaultPath is reading, or "" when the new spotui config file applies.
+func LegacyConfigPath() string {
+	path, legacy := resolveConfigPath()
+	if legacy {
+		return path
+	}
+	return ""
+}
+
+func resolveConfigPath() (path string, legacy bool) {
+	newPath := filepath.Join(ConfigDir(), "config.toml")
+	if dirExists(ConfigDir()) {
+		return newPath, false
+	}
+	legacyDir := filepath.Join(xdgDir("XDG_CONFIG_HOME", ".config"), "spotify-tui")
+	if dirExists(legacyDir) {
+		return filepath.Join(legacyDir, "config.toml"), true
+	}
+	return newPath, false
+}
+
+// NewStateDir returns the spotui XDG state directory without the legacy
+// fallback: $XDG_STATE_HOME/spotui. It names the destination when the user
+// wants to migrate.
+func NewStateDir() string {
+	return filepath.Join(xdgDir("XDG_STATE_HOME", filepath.Join(".local", "state")), "spotui")
+}
+
+// StateDir returns the XDG state directory for spotui:
+// $XDG_STATE_HOME/spotui. The device id and the persisted Spotify
 // credentials land there (written 0600 by the session bootstrap), never in
 // the repository (spec S9).
+//
+// One-time rename compatibility: when the spotui state dir does not exist
+// and the pre-rename spotify-tui one does, the legacy dir is returned so an
+// existing token cache keeps working; LegacyStateDir reports it.
 func StateDir() string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			base = "."
-		} else {
-			base = filepath.Join(home, ".local", "state")
-		}
+	dir, _ := resolveStateDir()
+	return dir
+}
+
+// LegacyStateDir reports the pre-rename spotify-tui state dir that StateDir
+// is using, or "" when the new spotui state dir applies.
+func LegacyStateDir() string {
+	_, legacy := resolveStateDir()
+	if legacy {
+		return filepath.Join(xdgDir("XDG_STATE_HOME", filepath.Join(".local", "state")), "spotify-tui")
 	}
-	return filepath.Join(base, "spotify-tui")
+	return ""
+}
+
+func resolveStateDir() (dir string, legacy bool) {
+	if dirExists(NewStateDir()) {
+		return NewStateDir(), false
+	}
+	legacyDir := filepath.Join(xdgDir("XDG_STATE_HOME", filepath.Join(".local", "state")), "spotify-tui")
+	if dirExists(legacyDir) {
+		return legacyDir, true
+	}
+	return NewStateDir(), false
 }
 
 // Load reads the config from DefaultPath.
@@ -74,9 +142,9 @@ func LoadFrom(path string) (Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Config{}, fmt.Errorf(
-				"spotify-tui: no config file at %s — create it with:  client_id = \"your-spotify-client-id\"", path)
+				"spotui: no config file at %s — create it with:  client_id = \"your-spotify-client-id\"", path)
 		}
-		return Config{}, fmt.Errorf("spotify-tui: cannot read %s: %v", path, err)
+		return Config{}, fmt.Errorf("spotui: cannot read %s: %v", path, err)
 	}
 	defer f.Close()
 
@@ -92,7 +160,7 @@ func LoadFrom(path string) (Config, error) {
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
 			return Config{}, fmt.Errorf(
-				"spotify-tui: %s: line %d: expected key = \"value\", got %q", path, lineNo, line)
+				"spotui: %s: line %d: expected key = \"value\", got %q", path, lineNo, line)
 		}
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
@@ -106,7 +174,7 @@ func LoadFrom(path string) (Config, error) {
 			n, err := strconv.Atoi(value)
 			if err != nil || n < 1 || n > 65535 {
 				return Config{}, fmt.Errorf(
-					"spotify-tui: %s: line %d: callback_port must be a port between 1 and 65535, got %q",
+					"spotui: %s: line %d: callback_port must be a port between 1 and 65535, got %q",
 					path, lineNo, value)
 			}
 			cfg.CallbackPort = n
@@ -115,11 +183,11 @@ func LoadFrom(path string) (Config, error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return Config{}, fmt.Errorf("spotify-tui: cannot read %s: %v", path, err)
+		return Config{}, fmt.Errorf("spotui: cannot read %s: %v", path, err)
 	}
 	if cfg.ClientID == "" {
 		return Config{}, fmt.Errorf(
-			"spotify-tui: %s is missing client_id — add:  client_id = \"your-spotify-client-id\"", path)
+			"spotui: %s is missing client_id — add:  client_id = \"your-spotify-client-id\"", path)
 	}
 	if cfg.CallbackPort == 0 {
 		cfg.CallbackPort = DefaultCallbackPort
