@@ -15,7 +15,10 @@ Keyboard model borrowed from `k9s` and `lazygit`: no modal editing, single keys,
 | Playback engine | real: embedded Spotify session, PulseAudio sinks, `space`/`n`/`p`/`+`/`-` |
 | Login | real: full-screen state with the auth URL, credentials cached in the XDG state dir (0600) |
 | Interface | real: section row, context strip, full-screen list, queue drawer, player bar, status bar |
-| Floating windows | real: `/`, `:`, `d`, `?` |
+| Floating windows | real: `/` (input only), `:`, `d`, `?` |
+| Library | real: your playlists, saved albums, playlist and album contents, search |
+| Radio | real: `R` keeps playing related tracks after the current one |
+| Login | real: `o` opens the authorization page in your default browser |
 | Library and search data | **mock** — the rows are fixed fixture data, not your account (next slice) |
 | Playing a track | `:play spotify:track:<id>` works now; pressing `enter` on a mock row does not |
 
@@ -69,7 +72,7 @@ librespot's own client id, the same identity `ncspot` and `spotifyd` use.
 
 ## Playing something today
 
-Until the real catalog lands, the list is fixture data. To hear audio, ask for a track by id:
+The library is yours once you log in. `:play` also takes a playlist or album, pasted as a link:
 
 ```
 :play spotify:track:4uLU6hMCjMI75M1A2tKUQC
@@ -96,6 +99,9 @@ like. Pick the output with `d`; the current track resumes on the new sink.
 | `/` | search window |
 | `:` | command window |
 | `d` | audio output window |
+| `s` | shuffle the open list (our order then drives `n`/`p`) |
+| `R` | radio: keep playing related tracks after this one |
+| `o` | on the login screen, open the authorization page in your browser |
 | `?` | help |
 
 One fact appears once per screen: the audio output and bitrate live in the player bar, the collection

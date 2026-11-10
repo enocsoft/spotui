@@ -36,6 +36,9 @@ S23. Contenidos de playlist **y de álbum** se resuelven por el cliente interno 
 S24. Búsqueda: la ventana flotante es **sólo input**; escribir dispara la búsqueda con debounce (~250 ms, mínimo 2 caracteres, ticks y respuestas viejas descartados) y los resultados reemplazan la lista principal agrupados por tipo. `enter` cierra la ventana y deja el cursor en los resultados; `esc` cierra y vuelve. Accionar sobre un resultado nunca cambia la fila de secciones. (L31)
 S25. La fila de secciones tiene sólo `Tracks` y `Playlists`: los álbumes guardados viven dentro de la vista Playlists como grupo propio, y la cola es el drawer. (L31, L33)
 
+S26. Radio: `R` alterna; al detectar el fin del tema por el tick de estado (posición ≥ duración, con latch por id para disparar una sola vez) pide el contexto relacionado con `ContextResolveAutoplay` y encadena el primer tema reproducible. La lista abierta no se toca, el drawer muestra lo que viene, y un fallo avisa y se detiene sin reintentar. (L34)
+S27. La tabla no promete columnas sin datos: `ADDED` se muestra sólo donde existen fechas (el fixture mock); en playlist, álbum y resultados se omite y el ancho liberado va a TITLE. (L34)
+
 ## Tasks
 
 | ID | Qué | Specs | Ruta | Commit |
@@ -63,6 +66,10 @@ S25. La fila de secciones tiene sólo `Tracks` y `Playlists`: los álbumes guard
 | T23 | Álbumes guardados dentro de la vista Playlists (`GET /v1/me/albums` con paging) | S25 | en curso | — |
 | T24 | Búsqueda: resaltado del match y foco distinguible entre grupos | S24 | en curso | — |
 | T25 | `:play` acepta link/URI de playlist y de álbum, además de track | S24 | en curso | — |
+
+| T26 | Radio con `R` sobre el resolver de autoplay | S26 | entregado | 4b9a111 |
+| T28 | Quitar la columna ADDED donde no hay fechas | S27 | entregado | 4b9a111 |
+| T27 | Tecla `o` abre la URL de login en el navegador | S9 | entregado | fbc5cd7 |
 
 ## Log
 
@@ -141,3 +148,5 @@ L31 (búsqueda, corregida dos veces por el usuario): primero se implementó con 
 L32 (álbumes): «porque no me deja abrir los albums» — no estaba implementado, no roto. Un álbum es otro contexto para el mismo resolver, así que extender fue cambiar la firma de id a URI; sin año en la franja porque ni la búsqueda ni el resolver lo traen.
 
 L33 (cierre de superficie, pedido del usuario «termina el todo»): en curso T23 (álbumes guardados como grupo en Playlists), T24 (resaltado del match y foco entre grupos) y T25 (`:play` con link de playlist/álbum). Después: review nativo sobre el candidato final commiteado y README actualizado con los dos logins.
+
+L34 (cierre de superficie): `ADDED` se retira de playlist, álbum y resultados porque el cliente interno no entrega `added_at` — una columna siempre vacía ocupa lugar sin informar, y el ancho liberado va a TITLE. La radio (`R`) se apoya en el tick de un segundo para detectar el final del tema, con latch por id (dispara exactamente una vez, verificado con 5 ticks posteriores), pide el contexto relacionado con `ContextResolveAutoplay` y encadena el primer tema reproducible sin tocar la lista abierta. Queda pendiente de decisión del usuario la precedencia drawer cuando radio y shuffle están encendidos a la vez: hoy gana la radio porque es lo que realmente suena.
