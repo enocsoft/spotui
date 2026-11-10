@@ -15,6 +15,7 @@ type rowKind int
 const (
 	rowHeader rowKind = iota
 	rowPlaylistItem
+	rowAlbumItem // a search-result album: named honestly, it does not open yet
 	rowTrack
 	rowStatus // loading / empty / error / rate-limit panel state
 )
@@ -55,19 +56,11 @@ func (m Model) currentTrack() (library.Track, bool) {
 	return library.Track{}, false
 }
 
-// tracksForView is the track list of the focused view (playlist, search or
-// queue), narrowed by the active filter.
+// tracksForView is the track list of the focused view (the open playlist in
+// mock mode), narrowed by the active filter.
 func (m Model) tracksForView() []library.Track {
 	var tracks []library.Track
-	switch m.section {
-	case SectionSearch:
-		tracks = m.data.Playlist().Tracks // mock: search covers the library list
-	case SectionQueue:
-		tracks = m.data.Queue()
-	default:
-		if !m.drillDown {
-			return nil
-		}
+	if m.section == SectionTracks {
 		tracks = m.data.Playlist().Tracks
 	}
 	if m.filter != "" {
@@ -93,7 +86,7 @@ func (m Model) visibleRows() []row {
 	if m.fetch != nil {
 		return m.realRows()
 	}
-	if m.section == SectionLibrary && !m.drillDown {
+	if m.section == SectionPlaylists {
 		var rows []row
 		for _, s := range m.data.Library() {
 			expanded := s.Name == "PLAYLISTS" && m.expanded[s.Name]
@@ -127,31 +120,52 @@ func (m Model) trackUnderCursor() (library.Track, bool) {
 	return r.track, r.kind == rowTrack
 }
 
+// playRow plays the track on a row; used by list and search results.
+func (m *Model) playRow(t library.Track) tea.Cmd {
+	if err := m.player.Play(t); err != nil {
+		return m.setToast("✗ " + err.Error())
+	}
+	return m.setToast("▶ " + t.Title)
+}
+
 func (m *Model) onEnter() tea.Cmd {
 	rows := m.visibleRows()
-	if m.section == SectionLibrary && !m.drillDown {
-		if m.cursor < len(rows) {
-			r := rows[m.cursor]
-			if r.kind == rowPlaylistItem {
-				if m.fetch != nil {
-					return m.openPlaylist(r.pl)
-				}
-				m.drillDown = true
-				m.cursor = 0
-				m.listOffset = 0
-				return nil
+	if m.cursor >= len(rows) {
+		return m.setToast("enter · nothing to open here")
+	}
+	r := rows[m.cursor]
+	// The results view acts on its rows without ever switching the section
+	// row: a track plays, a playlist opens its tracks, an album names the
+	// limit honestly (T19: there is no album-contents path yet).
+	if m.sView {
+		switch r.kind {
+		case rowTrack:
+			return m.playRow(r.track)
+		case rowPlaylistItem:
+			return m.openPlaylist(r.pl)
+		case rowAlbumItem:
+			return m.setToast("○ albums do not open · search a track or playlist")
+		default:
+			return m.setToast("enter · nothing to open here")
+		}
+	}
+	if m.section == SectionPlaylists {
+		if r.kind == rowPlaylistItem {
+			if m.fetch != nil {
+				return m.openPlaylist(r.pl)
 			}
-			if r.kind == rowHeader {
-				return m.onToggle()
-			}
+			m.section = SectionTracks
+			m.cursor = 0
+			m.listOffset = 0
+			return nil
+		}
+		if r.kind == rowHeader {
+			return m.onToggle()
 		}
 		return m.setToast("enter · nothing to open here")
 	}
-	if track, ok := m.trackUnderCursor(); ok {
-		if err := m.player.Play(track); err != nil {
-			return m.setToast("✗ " + err.Error())
-		}
-		return m.setToast("▶ " + track.Title)
+	if r.kind == rowTrack {
+		return m.playRow(r.track)
 	}
 	return m.setToast("enter · nothing to play on this row")
 }
@@ -219,6 +233,9 @@ func (m *Model) onToggle() tea.Cmd {
 	}
 	r := rows[m.cursor]
 	if r.kind == rowHeader {
+		if m.sView {
+			return m.setToast("l · nothing to save here")
+		}
 		name := strings.TrimPrefix(r.text, theme.GlyphExpanded+" ")
 		name = strings.TrimPrefix(name, theme.GlyphCollapsed+" ")
 		if name == "PLAYLISTS" {
@@ -250,11 +267,21 @@ func (m *Model) onToggle() tea.Cmd {
 	return m.setToast("l · nothing to save here")
 }
 
+// onEsc is esc in the list: the results view backs out to the previous
+// section view first, then the Tracks view returns to the navigation.
 func (m *Model) onEsc() tea.Cmd {
-	if m.drillDown && m.section == SectionLibrary {
-		m.drillDown = false
-		m.cursor = 0
-		m.listOffset = 0
+	if m.sView {
+		m.sView = false
+		m.clampCursor()
+		m.syncScroll()
+		return nil
+	}
+	if m.section == SectionTracks {
+		m.section = SectionPlaylists
+		m.cursor, m.listOffset = 0, 0
+		if m.fetch != nil {
+			return m.ensurePlaylistsLoaded()
+		}
 		return nil
 	}
 	return m.setToast("already at top")

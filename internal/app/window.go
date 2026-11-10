@@ -13,8 +13,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/nahuel/spotify-tui/internal/library"
-
 	"github.com/nahuel/spotify-tui/internal/ui/theme"
 )
 
@@ -51,9 +49,8 @@ var (
 	winCursorStyle = lipgloss.NewStyle().Foreground(theme.Surface).Background(theme.Accent)
 )
 
-// winRow is one scrollable row of window content (plain text; styled at
-// render time). label marks a type-group header of the real search results:
-// muted, informative, not actionable.
+// winRow is a scrollable row of window content (plain text; styled at render
+// time). The search window has none since T19 — it is input only.
 type winRow struct {
 	text  string
 	sel   bool // cursor row: bold primary on surface (current role)
@@ -100,128 +97,38 @@ func (m Model) windowSpec() winSpec {
 	return winSpec{}
 }
 
-// searchSpec: the same panel in two modes. Mock mode filters the open list
-// client-side. Real mode runs GET /v1/search under the 2026 cap of 10 and
-// renders type-grouped results with per-group counts; scrolling past the last
-// row pages by offset.
+// searchSpec: the search window is input only (T19) — header, the prompt
+// row with the typed query, and one hint line (the state or the result
+// count). No result rows ever render inside the window; the results appear
+// in the list behind, type-grouped by the list itself.
 func (m Model) searchSpec() winSpec {
-	if m.fetch != nil {
-		return m.realSearchSpec()
-	}
 	s := winSpec{
 		title:    "search",
 		meta:     "esc close",
 		hasInput: true,
 		input:    m.filter,
-		foot:     "enter apply · esc cancel",
 	}
-	rows := m.visibleRows()
-	s.footR = fmt.Sprintf("%d matches · remote search lands later", len(rows))
-	for i, r := range rows {
-		var text string
-		if r.kind == rowTrack {
-			num := padLeft(fmt.Sprintf("%d", r.num), 2)
-			if i == m.cursor {
-				num = padLeft(theme.GlyphSelected, 2)
-			}
-			text = num + " " + r.track.Title + " · " + r.track.Artist + " · " + r.track.Album
-		} else {
-			text = "  " + r.text
-		}
-		s.rows = append(s.rows, winRow{text: text, sel: i == m.cursor})
+	if m.fetch == nil {
+		// Mock mode: the window filters the open list client-side.
+		s.foot = "enter apply · esc cancel"
+		s.footR = fmt.Sprintf("%d matches", len(m.visibleRows()))
+		return s
 	}
-	return s
-}
-
-// realSearchSpec renders the search window from catalog state: grouped
-// results with counts, and loading / empty / error / rate-limit states in
-// place — nothing is faked (scope 5).
-func (m Model) realSearchSpec() winSpec {
-	s := winSpec{
-		title:    "search",
-		meta:     "esc close",
-		hasInput: true,
-		input:    m.filter,
-		foot:     "enter search · esc close",
-	}
-	maxW, _ := m.windowMaxSize()
-	innerW := maxW - 4
-	// result rows do not widen the window past its content cap (winRowCap):
-	// pad the right-aligned metadata to the width the window will actually
-	// have, so it never clips into a truncation glyph.
-	rowW := innerW
-	if rowW > winRowCap-4 {
-		rowW = winRowCap - 4
-	}
-
-	resultRow := func(text, right string, label bool) {
-		if right != "" {
-			budget := rowW - visibleWidth(right) - 1
-			if budget < 1 {
-				budget = 1
-			}
-			text = padRight(truncate(text, budget), rowW-visibleWidth(right)) + right
-		}
-		s.rows = append(s.rows, winRow{text: text, label: label})
-	}
-
-	hits := m.searchHits()
+	s.foot = "type ≥2 chars · enter results · esc close"
 	switch {
-	case m.sQuery == "" && len(hits) == 0 && !m.sLoading && m.sErr == nil:
-		s.rows = append(s.rows, winRow{text: "type a query · enter searches Spotify"})
+	case m.sQuery == "" && m.filter == "":
 		s.footR = ""
-		return s
-	case m.sLoading && len(hits) == 0:
-		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " searching…"})
+	case m.sLoading:
 		s.footR = "searching…"
-		return s
-	case m.sErr != nil && len(hits) == 0:
-		if library.IsRateLimited(m.sErr) {
-			s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " rate limited · the player is retrying"})
-			s.footR = "rate limited"
+	case m.sErr != nil:
+		if m.sRateLimited {
+			s.footR = "rate limited · r retry"
 		} else {
-			s.rows = append(s.rows, winRow{text: "✗ " + m.sErr.Error()})
-			s.footR = "search failed · enter retries"
+			s.footR = "search failed · r retry"
 		}
-		return s
-	case m.sRateLimited && len(hits) == 0:
-		// a 429 that survived the accessor's internal retries: the info state,
-		// not an invented retry loop (DESIGN global states)
-		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " rate limited · the player is retrying"})
-		s.footR = "rate limited"
-		return s
-	case m.sQuery != "" && len(hits) == 0 && !m.sLoading:
-		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " nothing matches"})
-		s.footR = "0 results"
-		return s
+	default:
+		s.footR = fmt.Sprintf("%d results", m.searchLoaded())
 	}
-
-	// type-grouped results with their counts (artboard: group count, metadata
-	// right-aligned); groups only render when they hold rows.
-	group := func(name string, loaded, total int) {
-		if loaded > 0 {
-			resultRow(fmt.Sprintf("%s %d of %d", name, loaded, total), "", true)
-		}
-	}
-	group("tracks", len(m.sTracks), m.sTotals.Tracks)
-	for i, t := range m.sTracks {
-		resultRow(fmt.Sprintf("%2d %s · %s", i+1, t.Title, t.Artist), fmtDur(t.Duration), false)
-	}
-	group("albums", len(m.sAlbums), m.sTotals.Albums)
-	for _, a := range m.sAlbums {
-		resultRow(theme.GlyphNotApplic+" "+a.Name, a.Artist, false)
-	}
-	group("playlists", len(m.sPlaylists), m.sTotals.Playlists)
-	for _, p := range m.sPlaylists {
-		resultRow(theme.GlyphNotApplic+" "+p.Name, p.Owner, false)
-	}
-	if m.sLoading && len(hits) > 0 {
-		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " loading more…", label: true})
-	}
-	if m.sRateLimited {
-		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " rate limited · the player is retrying", label: true})
-	}
-	s.footR = fmt.Sprintf("%d results", len(hits))
 	return s
 }
 
@@ -296,17 +203,14 @@ func (m Model) windowMaxSize() (int, int) {
 	return maxW, maxH
 }
 
-// windowRowCount is how many scrollable rows the open window has.
+// windowRowCount is how many scrollable rows the open window has. The
+// search window is input only (T19): no scrollable rows, no window cursor.
 func (m Model) windowRowCount() int {
 	switch m.win {
 	case winHelp:
 		return len(keyHintsTable) + len(helpExtraKeys)
 	case winPicker:
 		return len(m.data.Sinks())
-	case winSearch:
-		if m.fetch != nil {
-			return len(m.searchSpec().rows)
-		}
 	}
 	return 0
 }

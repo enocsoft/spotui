@@ -68,14 +68,20 @@ func TestRenderFitsTerminal(t *testing.T) {
 	}
 }
 
-// TestSectionRowOneLine: the section row is exactly one line — the next line is
-// a full rule, so a wrap would show up as a broken rule.
+// TestSectionRowOneLine: the section row is exactly one line and renders
+// only `Tracks │ Playlists` (T20/S18) — Search and Queue are never cells: the
+// queue is the drawer and search results are a transient view.
 func TestSectionRowOneLine(t *testing.T) {
 	m := newModel(t, 180, 50)
 	got := lines(m)
-	for _, section := range []string{"Library", "Search", "Queue"} {
+	for _, section := range []string{"Tracks", "Playlists"} {
 		if !strings.Contains(got[0], section) {
 			t.Errorf("section row %q missing %q", got[0], section)
+		}
+	}
+	for _, banned := range []string{"Search", "Queue"} {
+		if strings.Contains(got[0], banned) {
+			t.Errorf("section row %q must not carry a %q cell", got[0], banned)
 		}
 	}
 	if !isRule(got[1], 180) {
@@ -151,20 +157,20 @@ func TestQueueDrawerShowsEightRows(t *testing.T) {
 	}
 }
 
-// TestTabCyclesSections: tab moves Library -> Search -> Queue -> Library.
-func TestTabCyclesSections(t *testing.T) {
+// TestTabTogglesSections: tab moves Tracks -> Playlists -> Tracks. There are
+// only two sections now (T20).
+func TestTabTogglesSections(t *testing.T) {
 	m := newModel(t, 180, 50)
-	pressKey(t, m, tea.KeyTab)
-	if got := m.ActiveSection(); got != SectionSearch {
-		t.Errorf("after 1 tab section = %v, want Search", got)
+	if got := m.ActiveSection(); got != SectionTracks {
+		t.Errorf("mock starts inside the open list, section = %v, want Tracks", got)
 	}
 	pressKey(t, m, tea.KeyTab)
-	if got := m.ActiveSection(); got != SectionQueue {
-		t.Errorf("after 2 tabs section = %v, want Queue", got)
+	if got := m.ActiveSection(); got != SectionPlaylists {
+		t.Errorf("after 1 tab section = %v, want Playlists", got)
 	}
 	pressKey(t, m, tea.KeyTab)
-	if got := m.ActiveSection(); got != SectionLibrary {
-		t.Errorf("after 3 tabs section = %v, want Library", got)
+	if got := m.ActiveSection(); got != SectionTracks {
+		t.Errorf("after 2 tabs section = %v, want Tracks", got)
 	}
 }
 

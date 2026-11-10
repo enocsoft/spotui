@@ -91,8 +91,8 @@ func newRealModel(t *testing.T, w, h int, fetch library.Fetch) (*Model, *stubPla
 	if m.fetch == nil {
 		t.Fatal("real mode: the model must hold the catalog fetch")
 	}
-	if m.drillDown {
-		t.Fatal("real mode must start at the library root, not inside a fixture playlist")
+	if m.section != SectionPlaylists {
+		t.Fatal("real mode must start at the playlists navigation, not inside a fixture playlist")
 	}
 	return &m, pl
 }
@@ -147,6 +147,24 @@ func typeIn(t *testing.T, m *Model, s string) {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		*m = updated.(Model)
 	}
+}
+
+// fireDebounce applies the debounce tick synchronously (no sleeping) and
+// drains the command it produced — the same contract runCatalogCmd uses for
+// key presses.
+func fireDebounce(t *testing.T, m *Model, seq int) {
+	t.Helper()
+	updated, cmd := m.Update(searchDebounceTick{seq: seq})
+	*m = updated.(Model)
+	runCatalogCmd(t, m, cmd)
+}
+
+// typeSearch types a whole query and fires the debounce once. The keystrokes'
+// own tick commands are discarded (they only re-arm the 250 ms timer).
+func typeSearch(t *testing.T, m *Model, q string) {
+	t.Helper()
+	typeIn(t, m, q)
+	fireDebounce(t, m, m.sDebounce)
 }
 
 // loadPlaylistsReady simulates the session becoming live: EventReady fires
@@ -233,9 +251,9 @@ func TestCatalogForeignPlaylistContentsLoad(t *testing.T) {
 
 	// the row under the header; enter opens it
 	pressRun(t, m, "j")
-	pressRun(t, m, "enter")
-	if !m.drillDown {
-		t.Fatal("enter on a real playlist row must drill into it")
+	pressRun(t, m, "enter") // open the playlist
+	if m.section != SectionTracks {
+		t.Fatal("a real playlist opens on the Tracks view")
 	}
 	got := m.View()
 	if !strings.Contains(got, "So What") {
@@ -306,12 +324,15 @@ func TestCatalogPlaylistLoadingAndErrorStates(t *testing.T) {
 	loadPlaylistsReady(t, m)
 	pressRun(t, m, "j")
 	// while the fetch is in flight the panel shows loading, not empty
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("enter")})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	*m = updated.(Model)
 	if !strings.Contains(m.View(), "loading tracks") {
 		t.Errorf("the contents panel must show a loading state, got:\n%s", m.View())
 	}
 	runCatalogCmd(t, m, cmd)
+	if m.section != SectionTracks {
+		t.Fatal("opening a playlist must land on the Tracks view")
+	}
 	got := m.View()
 	if !strings.Contains(got, "✗ could not load") || !strings.Contains(got, "spotify 500 · boom") {
 		t.Errorf("the error state must carry the Spotify status and message, got:\n%s", got)
@@ -445,31 +466,326 @@ func searchFixtures(f *stubFetch) {
 	}
 }
 
+// --- search: the input-only window, the debounced query, the results view ---
+
+// searchGroupFixtures serves one page per query with a track, an album and a
+// playlist, so grouped rendering can be asserted end to end.
+func searchGroupFixtures(f *stubFetch) {
+	f.searchFn = func(query string, offset int) (library.SearchPage, error) {
+		if offset != 0 {
+			return library.SearchPage{}, errors.New("unexpected offset — no prefetch")
+		}
+		return searchGroupFixturesPage(query, offset), nil
+	}
+	f.playlistsFn = func(offset int) (library.PlaylistPage, error) {
+		if offset != 0 {
+			return library.PlaylistPage{}, errors.New("unexpected offset — no prefetch")
+		}
+		return library.PlaylistPage{
+			Playlists: []library.PlaylistSummary{
+				{ID: "pl2", Name: "Road Trip", Owner: "nahuel", Private: false, TrackCount: 17},
+			},
+			Total: 1, NextOffset: -1,
+		}, nil
+	}
+}
+
+func searchGroupFixturesPage(query string, offset int) library.SearchPage {
+	return library.SearchPage{
+		Query: query,
+		Tracks: []library.Track{
+			{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+			{ID: realTrackID2, Title: "Blue in Green", Artist: "Miles Davis", Album: "Kind of Blue"},
+		},
+		Albums:     []library.AlbumSummary{{ID: "al1", Name: "Kind of Blue", Artist: "Miles Davis"}},
+		Playlists:  []library.PlaylistSummary{{ID: "pl1", Name: "Bebop Essentials", Owner: "nahuel", Private: true, TrackCount: 42}},
+		Totals:     library.SearchTotals{Tracks: 25, Albums: 4, Playlists: 2},
+		NextOffset: -1,
+	}
+}
+
+// TestSearchTypingDrivesSearch: typing arms a ~250 ms debounce; a shorter
+// query never fires; every keystroke re-arms it, so a stale tick is dropped.
+func TestSearchTypingDrivesSearch(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+
+	press(t, m, "/")
+	if m.win != winSearch {
+		t.Fatal("`/` should open the search window")
+	}
+	typeIn(t, m, "r")
+	fireDebounce(t, m, m.sDebounce)
+	if calls := strings.Join(f.calls, ","); calls != "" {
+		t.Fatalf("a 1-char query must not search, made [%s]", calls)
+	}
+
+	typeIn(t, m, "a") // "ra" — armed, not fired yet
+	if calls := strings.Join(f.calls, ","); calls != "" {
+		t.Fatalf("the debounce must not fire before its tick, made [%s]", calls)
+	}
+	fireDebounce(t, m, m.sDebounce)
+	if got := strings.Join(f.calls, ","); got != `search "ra" 0` {
+		t.Fatalf("the debounce tick must run the query once, made [%s]", got)
+	}
+	if m.sQuery != "ra" || !m.sView {
+		t.Errorf("after the tick the query must be applied and the results view on: q=%q sView=%v", m.sQuery, m.sView)
+	}
+
+	staleCalls := len(f.calls)
+	typeIn(t, m, "i")                 // "rai" re-arms the debounce
+	fireDebounce(t, m, m.sDebounce-1) // a stale tick must be dropped
+	if got := len(f.calls); got != staleCalls {
+		t.Errorf("a stale debounce tick must not search, calls went %d -> %d", staleCalls, got)
+	}
+	fireDebounce(t, m, m.sDebounce)
+	if got := strings.Join(f.calls, ","); got != `search "ra" 0,search "rai" 0` {
+		t.Errorf("the new tick must run the new query, made [%s]", got)
+	}
+}
+
+// TestSearchStaleResponseDropped: answers are matched by query — a response
+// for an older query must not overwrite the current results.
+func TestSearchStaleResponseDropped(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	if got := strings.Join(f.calls, ","); got != `search "rain" 0` {
+		t.Fatalf("setup: made [%s]", got)
+	}
+
+	stale := library.SearchPage{Query: "old", Tracks: []library.Track{
+		{ID: "stale1234567890123456", Title: "Stale Track", Artist: "Nobody"},
+	}}
+	updated, _ := m.Update(searchMsg{query: "old", offset: 0, page: stale})
+	*m = updated.(Model)
+	if len(m.sTracks) != 2 || m.sTracks[0].Title != "So What" {
+		t.Errorf("a stale response must be dropped, tracks are %+v", m.sTracks)
+	}
+	if got := m.View(); !strings.Contains(got, "So What") || strings.Contains(got, "Stale Track") {
+		t.Errorf("the view must keep the current results, got:\n%s", got)
+	}
+}
+
+// TestSearchResultsReplaceTheListGrouped: the results render in the main list
+// — tracks, then albums, then playlists — with the context strip naming the
+// query and the counts, and the section row untouched.
+func TestSearchResultsReplaceTheListGrouped(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	loadPlaylistsReady(t, m)
+
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	got := stripANSI(m.View())
+	if !strings.Contains(got, "So What") || !strings.Contains(got, "Blue in Green") {
+		t.Errorf("the track results must render in the list, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Kind of Blue") || !strings.Contains(got, "Bebop Essentials") {
+		t.Errorf("album and playlist results must render after the tracks, got:\n%s", got)
+	}
+	if !strings.Contains(got, "2 tracks · 1 album · 1 playlist") {
+		t.Errorf("the context strip must name the counts, got:\n%s", got)
+	}
+	if m.section != SectionPlaylists {
+		t.Errorf("the results view must not switch the section, got %v", m.section)
+	}
+	// the section row still renders Tracks │ Playlists — no Search cell
+	if row := stripANSI(lines(m)[0]); strings.Contains(row, "Search") || strings.Contains(row, "Queue") {
+		t.Errorf("the section row must never grow a Search or Queue cell: %q", row)
+	}
+	// the cursor sits on the first result row
+	if m.cursor != 0 {
+		t.Errorf("results must reset the cursor to 0, got %d", m.cursor)
+	}
+}
+
+// TestSearchEnterClosesWindowLeavesCursorOnResults: enter in the window
+// closes it and leaves the cursor on the results, ready to navigate.
+func TestSearchEnterClosesWindowLeavesCursorOnResults(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	if m.win != winSearch {
+		t.Fatal("setup: the window should still be open")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	*m = updated.(Model)
+	if m.win != winNone {
+		t.Errorf("enter must close the window, win = %v", m.win)
+	}
+	if !m.sView {
+		t.Error("enter must leave the results view on")
+	}
+	if m.cursor != 0 {
+		t.Errorf("the cursor must sit on the results, got %d", m.cursor)
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "So What") {
+		t.Errorf("the results must still be on screen, got:\n%s", got)
+	}
+}
+
+// TestSearchEscReturnsToPreviousSection: esc in the window returns to the
+// previous section view — the results are discarded, cursor restored.
+func TestSearchEscReturnsToPreviousSection(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	loadPlaylistsReady(t, m)
+	press(t, m, "j") // cursor on the first playlist row
+	before := m.View()
+	preCursor := m.cursor
+
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	if !m.sView {
+		t.Fatal("setup: results should be showing")
+	}
+	pressKey(t, m, tea.KeyEsc)
+	if m.win != winNone || m.sView {
+		t.Errorf("esc must close the window and discard the results: win=%v sView=%v", m.win, m.sView)
+	}
+	if m.cursor != preCursor {
+		t.Errorf("esc must restore the cursor, got %d want %d", m.cursor, preCursor)
+	}
+	if got := m.View(); got != before {
+		t.Errorf("esc must return to the previous section view exactly:\n%s", got)
+	}
+}
+
+// TestSearchListEscReturnsFromResults: with the window already closed, esc on
+// the results view goes back to the previous section view.
+func TestSearchListEscReturnsFromResults(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	pressKey(t, m, tea.KeyEnter) // close the window on the results
+	pressKey(t, m, tea.KeyEsc)
+	if m.sView {
+		t.Error("esc on the results must return to the previous section view")
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "playlists") {
+		t.Errorf("the playlists navigation should be back, got:\n%s", got)
+	}
+}
+
+// TestSearchEnterOnResultsActs: a track plays, a playlist opens its tracks,
+// and an album honestly says it does not open — without leaving the results.
+func TestSearchEnterOnResultsActs(t *testing.T) {
+	f := &stubFetch{
+		itemsFn: func(id string, offset int) (library.ItemsPage, error) {
+			return library.ItemsPage{Tracks: []library.Track{
+				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+			}, Total: 1, NextOffset: -1}, nil
+		},
+	}
+	searchGroupFixtures(f)
+	m, pl := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	pressKey(t, m, tea.KeyEnter) // close the window on the results
+
+	// rows: TRACKS header, 2 tracks, ALBUMS header, album, PLAYLISTS header, playlist
+	pressRun(t, m, "j") // onto the first track
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	*m = updated.(Model)
+	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
+		t.Errorf("enter on a track result must play it, played %+v", pl.played)
+	}
+	if m.section != SectionPlaylists || !m.sView {
+		t.Errorf("playing a result must not switch the section or leave the results: %v/%v", m.section, m.sView)
+	}
+
+	pressRun(t, m, "j") // onto track 2
+	pressRun(t, m, "j") // onto the ALBUMS header
+	pressRun(t, m, "j") // onto the album row
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	*m = updated.(Model)
+	if got := stripANSI(lines(m)[49]); !strings.Contains(got, "albums do not open") {
+		t.Errorf("an album result must say honestly that it does not open, got %q", got)
+	}
+	if m.section != SectionPlaylists || !m.sView {
+		t.Errorf("an unopenable album must not move the user: %v/%v", m.section, m.sView)
+	}
+
+	pressRun(t, m, "j") // PLAYLISTS header
+	pressRun(t, m, "j") // playlist row
+	pressRun(t, m, "enter")
+	if m.section != SectionTracks {
+		t.Errorf("enter on a playlist result must open its tracks, section = %v", m.section)
+	}
+	if m.sView {
+		t.Error("opening the playlist leaves the results view")
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "So What") {
+		t.Errorf("the playlist contents should be on screen, got:\n%s", got)
+	}
+}
+
+// TestSearchRateLimitRowInResults: a 429 shows the rate-limit row with `r` to
+// retry in the results view, and nothing retries on its own.
+func TestSearchRateLimitRowInResults(t *testing.T) {
+	f := &stubFetch{
+		searchFn: func(query string, offset int) (library.SearchPage, error) {
+			return library.SearchPage{}, &library.APIError{Status: 429, RateLimited: true}
+		},
+	}
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	pressKey(t, m, tea.KeyEnter) // close the window on the results
+	got := stripANSI(m.View())
+	if !strings.Contains(got, "rate limited · press r to retry") {
+		t.Errorf("the rate-limit row must offer `r` to retry, got:\n%s", got)
+	}
+	if !m.sRateLimited {
+		t.Error("the rate-limit state must stay inspectable")
+	}
+	// no retry loop: scrolling without `r` never re-requests
+	pressRun(t, m, "G")
+	if got := len(f.calls); got != 1 {
+		t.Errorf("a rate-limited result must not retry by itself, made %d calls", got)
+	}
+	f.searchFn = func(query string, offset int) (library.SearchPage, error) {
+		return searchGroupFixturesPage(query, offset), nil
+	}
+	pressRun(t, m, "r")
+	if got := len(f.calls); got != 2 {
+		t.Errorf("`r` must retry the query once, made %d calls", got)
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "So What") {
+		t.Errorf("the retried results should render, got:\n%s", got)
+	}
+}
+
+// --- search: offset pagination under the 10-result cap ---
+
 func TestCatalogSearchPaginatesByOffsetUnderTheCap(t *testing.T) {
 	f := &stubFetch{}
 	searchFixtures(f)
 	m, _ := newRealModel(t, 180, 50, f)
 
 	press(t, m, "/")
-	typeIn(t, m, "blue")
-	pressRun(t, m, "enter") // runs the query
+	typeSearch(t, m, "blue")
 	if got := strings.Join(f.calls, ","); got != `search "blue" 0` {
 		t.Fatalf("first search made [%s], want one capped request at offset 0", got)
 	}
 	got := m.View()
-	if !strings.Contains(got, "tracks 2 of 25") {
-		t.Errorf("the window shows type-grouped results with counts, got:\n%s", got)
-	}
 	if !strings.Contains(got, "So What") || !strings.Contains(got, "Blue in Green") {
-		t.Errorf("the window should list the page's tracks, got:\n%s", got)
+		t.Errorf("the results view should list the page's tracks, got:\n%s", got)
 	}
+	pressKey(t, m, tea.KeyEnter) // close the window on the results
 
-	// scrolling to the last result drives the next offset page
-	for i := 0; i < 2; i++ {
-		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-		*m = updated.(Model)
-		runCatalogCmd(t, m, cmd)
-	}
+	// scrolling the results view to the last row drives the next offset page
+	pressRun(t, m, "G")
 	if got := strings.Join(f.calls, ","); got != `search "blue" 0,search "blue" 10` {
 		t.Fatalf("scrolling past the last result must page by offset, made [%s]", got)
 	}
@@ -486,49 +802,32 @@ func TestCatalogSearchEmptyState(t *testing.T) {
 	}
 	m, _ := newRealModel(t, 180, 50, f)
 	press(t, m, "/")
-	typeIn(t, m, "zzzz")
-	pressRun(t, m, "enter")
+	typeSearch(t, m, "zzzz")
 	got := m.View()
 	if !strings.Contains(got, "nothing matches") {
 		t.Errorf("an empty search shows the empty state, got:\n%s", got)
 	}
-	if strings.Contains(got, "tracks 0") {
+	if strings.Contains(got, "TRACKS") {
 		t.Errorf("an empty search must not render empty groups, got:\n%s", got)
 	}
 }
 
-func TestCatalogSearchRateLimitState(t *testing.T) {
-	f := &stubFetch{
-		searchFn: func(query string, offset int) (library.SearchPage, error) {
-			return library.SearchPage{}, &library.APIError{Status: 429, RateLimited: true}
-		},
-	}
+// TestRealSearchWindowStaysInputOnly: even once the results are in the list,
+// the floating window renders only its prompt and one hint line.
+func TestRealSearchWindowStaysInputOnly(t *testing.T) {
+	f := &stubFetch{}
+	searchGroupFixtures(f)
 	m, _ := newRealModel(t, 180, 50, f)
 	press(t, m, "/")
-	typeIn(t, m, "blue")
-	pressRun(t, m, "enter")
-	got := m.View()
-	if !strings.Contains(got, "rate limited") {
-		t.Errorf("a 429 must surface the existing rate-limit state, got:\n%s", got)
+	typeSearch(t, m, "rain")
+	inner := windowInner(t, m)
+	for _, banned := range []string{"So What", "Bebop Essentials", "Kind of Blue"} {
+		if strings.Contains(inner, banned) {
+			t.Errorf("the window must never render result rows, found %q inside it:\n%s", banned, inner)
+		}
 	}
-	if !library.IsRateLimited(m.sErr) && m.sErr != nil {
-		t.Errorf("the rate-limit error must stay inspectable, got %v", m.sErr)
-	}
-}
-
-func TestCatalogSearchEnterPlaysTrackResult(t *testing.T) {
-	f := &stubFetch{}
-	searchFixtures(f)
-	m, pl := newRealModel(t, 180, 50, f)
-	press(t, m, "/")
-	typeIn(t, m, "blue")
-	pressRun(t, m, "enter") // run the query
-	press(t, m, "j")        // off the group header, onto the first track
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	*m = updated.(Model)
-	_ = cmd // acting on a result produces a toast; Play happens synchronously
-	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
-		t.Errorf("enter on a track result must play it, played %+v", pl.played)
+	if !strings.Contains(inner, "> ") || !strings.Contains(inner, "rain") {
+		t.Errorf("the window should show the prompt with the typed query, got:\n%s", inner)
 	}
 }
 
@@ -540,8 +839,8 @@ func TestMockModeHasNoCatalog(t *testing.T) {
 	if m.fetch != nil {
 		t.Error("SPOTIFY_TUI_MOCK=1 must keep the mock data source: no catalog fetch")
 	}
-	if !m.drillDown {
-		t.Error("mock mode keeps the artboard's drill-down start")
+	if m.section != SectionTracks {
+		t.Error("mock mode keeps the artboard start inside the open track list")
 	}
 }
 
@@ -599,17 +898,19 @@ func TestCatalogViewFitsTerminal(t *testing.T) {
 		check("second playlist")
 		pressKey(t, m, tea.KeyEsc)
 
-		// the search window over the list
+		// the search window over the list, results behind it
 		press(t, m, "/")
-		typeIn(t, m, "blue")
-		pressRun(t, m, "enter")
-		check("search window")
+		typeSearch(t, m, "blue")
+		check("search window with results")
+		pressKey(t, m, tea.KeyEnter) // close the window on the results
+		check("search results view")
 		pressKey(t, m, tea.KeyEsc)
 
-		// the queue section and drawer over catalog data
+		// the sections toggle and the drawer coexists (no Queue section any more)
 		pressKey(t, m, tea.KeyTab)
+		check("tracks section")
 		pressKey(t, m, tea.KeyTab)
 		press(t, m, "q")
-		check("queue with drawer")
+		check("playlists with drawer")
 	}
 }

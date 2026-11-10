@@ -3,6 +3,7 @@
 package app
 
 import (
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,38 +12,26 @@ import (
 	"github.com/nahuel/spotify-tui/internal/library"
 )
 
-// Section is one of the three top-row sections (spec S5).
+// Section is one of the two top-row sections (spec S18, T20): Tracks (the
+// open list: playlist, album or search result) and Playlists (navigation).
+// Search and Queue are not sections: the queue is the drawer (S4) and the
+// search results are the transient sView state over whichever section is
+// active — they never get a cell.
 type Section int
 
 const (
-	SectionLibrary Section = iota
-	SectionSearch
-	SectionQueue
+	SectionTracks Section = iota
+	SectionPlaylists
 )
 
 func (s Section) String() string {
-	switch s {
-	case SectionSearch:
-		return "Search"
-	case SectionQueue:
-		return "Queue"
-	default:
-		return "Library"
+	if s == SectionPlaylists {
+		return "Playlists"
 	}
+	return "Tracks"
 }
 
-func (s Section) lower() string {
-	switch s {
-	case SectionSearch:
-		return "search"
-	case SectionQueue:
-		return "queue"
-	default:
-		return "library"
-	}
-}
-
-var sections = []Section{SectionLibrary, SectionSearch, SectionQueue}
+var sections = []Section{SectionTracks, SectionPlaylists}
 
 // toast is a one-line message shown in the status bar until the next key or
 // the timeout fires. Unimplemented actions toast instead of failing silently.
@@ -52,6 +41,11 @@ type toast struct {
 }
 
 type toastTick struct{ seq int }
+
+// searchDebounceTick fires ~250 ms after the last keystroke in the search
+// window (T19): typing drives the search, and every keystroke re-arms the
+// timer, so a tick whose seq is not the newest is stale and dropped.
+type searchDebounceTick struct{ seq int }
 
 // playerEventMsg wraps a library.Event from the real player (EventLogin /
 // EventReady / EventFailed / EventState) into the update loop.
@@ -86,8 +80,7 @@ type Model struct {
 	cursor       int
 	listOffset   int
 	drawerOpen   bool
-	drillDown    bool   // inside the mock playlist (library drill-down)
-	filter       string // `/` client-side filter of the open list
+	filter       string // `/` client-side filter of the open list (mock mode)
 	expanded     map[string]bool
 	toast        toast
 
@@ -129,8 +122,12 @@ type Model struct {
 	plItemsErr            error
 	iPending              int
 
-	// Search: the floating window (`/`) runs GET /v1/search under the 2026
-	// cap of 10 and pages by offset as the window scrolls.
+	// Search (T19): the floating window (`/`) is input only — prompt and one
+	// hint line, never result rows. Typing arms the 250 ms debounce; when the
+	// tick fires the query runs and sView turns on: the results replace the
+	// main list (tracks, then albums, then playlists) while the section row
+	// stays put. enter closes the window on the results; esc backs out to the
+	// previous section view. Stale answers are dropped by query.
 	sQuery       string
 	sPending     int
 	sNext        int
@@ -141,6 +138,8 @@ type Model struct {
 	sAlbums      []library.AlbumSummary
 	sPlaylists   []library.PlaylistSummary
 	sTotals      library.SearchTotals
+	sView        bool
+	sDebounce    int // debounce epoch: each keystroke re-arms the timer
 
 	// pendingSaved holds saved toggles in flight: the cell answers only when
 	// the server does (Mirror Rule); on failure nothing to revert, just toast.
@@ -159,16 +158,17 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 		data:         data,
 		player:       player,
 		clock:        clock,
-		section:      SectionLibrary,
 		expanded:     map[string]bool{"PLAYLISTS": true},
 		pendingSaved: map[string]bool{},
 	}
 	// Real mode: the player exposes the Web API catalog (T7) and the app starts
-	// at the library root. Mock mode keeps the artboard's drill-down start.
+	// on the playlists navigation. Mock mode keeps the artboard's open list.
 	if cp, ok := player.(library.CatalogProvider); ok {
 		m.fetch = cp.Catalog()
+		m.section = SectionPlaylists
+	} else {
+		m.section = SectionTracks
 	}
-	m.drillDown = m.fetch == nil
 	if pe, ok := player.(library.PlayerEvents); ok {
 		m.eventCh = pe.Events()
 	}
@@ -209,6 +209,16 @@ func (m Model) rearmEvents() tea.Cmd {
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
 }
+
+// searchDebounceCmd arms the ~250 ms typing debounce (T19): the tick fires
+// only while the window is still open, and its seq lets a newer keystroke
+// drop it.
+func searchDebounceCmd(seq int) tea.Cmd {
+	return tea.Tick(searchDebounce, func(time.Time) tea.Msg { return searchDebounceTick{seq: seq} })
+}
+
+// searchDebounce is how long typing must stay quiet before the query runs.
+const searchDebounce = 250 * time.Millisecond
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -257,6 +267,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case searchMsg:
 		m.applySearch(msg)
 		return m, nil
+
+	case searchDebounceTick:
+		return m, m.onDebounceTick(msg.seq)
 
 	case savedMsg:
 		return m, m.applySaved(msg)
@@ -314,7 +327,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.section = sections[(int(m.section)+1)%len(sections)]
 		m.cursor = 0
 		m.listOffset = 0
-		if m.section == SectionLibrary {
+		if m.section == SectionPlaylists {
 			cmd = m.ensurePlaylistsLoaded()
 		}
 	case "q":
@@ -375,6 +388,8 @@ func (m Model) handleWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.fetch != nil {
 			return m.handleRealSearchKey(msg)
 		}
+		// Mock mode: the input-only window filters the open list live; enter
+		// applies, esc cancels and restores (S19 unchanged).
 		switch msg.String() {
 		case "esc":
 			m.closeWindow(true) // cancel: restore list and cursor
@@ -387,12 +402,10 @@ func (m Model) handleWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.filter = string(r[:len(r)-1])
 			}
 			m.cursor = 0
-			m.winOffset = 0
 		default:
 			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
 				m.filter += msg.String()
 				m.cursor = 0
-				m.winOffset = 0
 			}
 		}
 		return m, nil
@@ -432,10 +445,6 @@ func (m *Model) openWindow(k windowKind) {
 	switch k {
 	case winSearch:
 		m.filter = ""
-		// keep the cursor row visible inside the window results
-		if area := m.windowRowsArea(); area > 0 && m.cursor >= area {
-			m.winOffset = m.cursor - area + 1
-		}
 	case winPalette:
 		m.cmdInput = ""
 	}
@@ -491,46 +500,41 @@ func (m *Model) syncWinScroll() {
 }
 
 // handleRealSearchKey is the search window in real mode: the input edits the
-// query, enter runs it or acts on the selected result, and j/k scroll the
-// results — reaching the last row pages by offset under the cap of 10.
+// query and every keystroke re-arms the ~250 ms debounce that runs it (T19).
+// enter closes the window and leaves the cursor on the results (a typed but
+// unfired query flushes now); esc closes it and returns to the previous
+// section view.
 func (m Model) handleRealSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.closeWindow(true)
+		m.sView = false
+		return m, nil
 	case "enter":
-		cmd := m.searchEnter()
+		q := strings.TrimSpace(m.filter)
+		var cmd tea.Cmd
+		if len([]rune(q)) >= 2 && q != m.sQuery {
+			m.sDebounce++ // the pending tick is stale from now on
+			cmd = m.startSearch(q)
+		}
+		m.closeWindow(false)
+		m.clampCursor()
+		m.syncScroll()
 		return m, cmd
-	case "up", "k":
-		m.moveWinCursor(-1)
-	case "down", "j":
-		m.moveWinCursor(1)
-		return m, m.ensureMoreSearch()
 	case "backspace":
 		if r := []rune(m.filter); len(r) > 0 {
 			m.filter = string(r[:len(r)-1])
+			m.sDebounce++
+			return m, searchDebounceCmd(m.sDebounce)
 		}
-		m.winOffset = 0
 	default:
 		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
 			m.filter += msg.String()
-			m.winOffset = 0
+			m.sDebounce++
+			return m, searchDebounceCmd(m.sDebounce)
 		}
 	}
 	return m, nil
-}
-
-// ensureMoreSearch pages the search results by offset when the window cursor
-// reaches the last row (scope 5: offset pagination driven by the scrolling).
-func (m *Model) ensureMoreSearch() tea.Cmd {
-	if m.fetch == nil || m.win != winSearch || m.sLoading || m.sNext < 0 || m.sErr != nil {
-		return nil
-	}
-	rows := m.searchSpec().rows
-	if m.winCursor != len(rows)-1 {
-		return nil
-	}
-	m.sLoading, m.sPending = true, m.sNext
-	return m.searchCmd(m.sNext)
 }
 
 func (m *Model) setToast(text string) tea.Cmd {

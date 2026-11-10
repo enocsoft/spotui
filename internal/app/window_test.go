@@ -156,6 +156,52 @@ func TestWindowOpenKeepsListScroll(t *testing.T) {
 	}
 }
 
+// windowInner returns the visible text strictly inside the floating window's
+// frame (between the edges, excluding them), so tests can assert what the
+// window itself renders regardless of the list behind it.
+func windowInner(t *testing.T, m *Model) string {
+	t.Helper()
+	top, bottom, left, right := windowBox(t, m)
+	var b strings.Builder
+	for i := top + 1; i < bottom; i++ {
+		r := []rune(stripANSI(lines(m)[i]))
+		if right+1 <= len(r) {
+			r = r[left+1 : right]
+		}
+		b.WriteString(strings.TrimRight(string(r), " "))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// TestSearchWindowIsInputOnly: `/` opens an input-only window — header,
+// prompt row and one hint line, never a result row (T19). The results appear
+// in the list behind, not inside the window.
+func TestSearchWindowIsInputOnly(t *testing.T) {
+	m := newModel(t, 180, 50)
+	press(t, m, "/")
+	top, bottom, _, _ := windowBox(t, m)
+	if got := bottom - top + 1; got > 10 {
+		t.Errorf("an empty input-only window should be ~8 lines, got %d", got)
+	}
+	press(t, m, "m")
+	press(t, m, "o")
+	inner := windowInner(t, m)
+	for _, banned := range []string{"Moanin", "So What", "Giant Steps"} {
+		if strings.Contains(inner, banned) {
+			t.Errorf("the search window must never render result rows, found %q inside it:\n%s", banned, inner)
+		}
+	}
+	if !strings.Contains(inner, "> ") {
+		t.Errorf("the search window must show its > input prompt, got:\n%s", inner)
+	}
+	// esc still restores the list behind unchanged
+	pressKey(t, m, tea.KeyEsc)
+	if strings.Contains(m.View(), "┌") {
+		t.Error("esc must close the search window")
+	}
+}
+
 // TestPalettePlay: `:play` accepts a bare 22-char base62 id and a full
 // spotify:track: URI (with surrounding whitespace and quotes), plays it
 // through the existing player adapter, and rejects garbage with a one-line
@@ -244,17 +290,5 @@ func TestPaletteAndHelpOpenWindows(t *testing.T) {
 	}
 }
 
-// TestSearchWindowAnnouncesRemoteSearch: the search window footer says remote
-// search lands later (T7); it must not fake remote results.
-func TestSearchWindowAnnouncesRemoteSearch(t *testing.T) {
-	m := newModel(t, 180, 50)
-	press(t, m, "/")
-	if got := stripANSI(m.View()); !strings.Contains(got, "remote search") {
-		t.Errorf("search footer must say remote search lands later, got:\n%s", got)
-	}
-	press(t, m, "m")
-	press(t, m, "o")
-	if got := stripANSI(m.View()); strings.Contains(got, "42 matches") {
-		t.Errorf("filtering is client-side only; the count must reflect this list, got:\n%s", got)
-	}
-}
+// TestSearchWindowAnnouncesRemoteSearch was removed with T19: the window is
+// input-only now, so there is no in-window result list left to announce.

@@ -103,7 +103,7 @@ func (m Model) listHeight() int {
 // visibleDataRows is how many data rows fit below the table header.
 func (m Model) visibleDataRows() int {
 	h := m.listHeight()
-	if m.section == SectionLibrary && !m.drillDown {
+	if m.sView || m.section != SectionTracks {
 		return h
 	}
 	h--
@@ -280,32 +280,27 @@ func (m Model) topBar(w int) string {
 }
 
 // contextStrip: one row — where you are, owner/privacy, then the facts that
-// appear nowhere else (One Fact Rule). Real mode reads the catalog state; the
-// mock keeps the fixture playlist.
+// appear nowhere else (One Fact Rule). The search results name the query and
+// their counts (T19). Real mode reads the catalog state; the mock keeps the
+// fixture playlist.
 func (m Model) contextStrip(w int) string {
 	if m.fetch != nil {
 		return m.realContextStrip(w)
 	}
 	var left, right string
-	pl := m.data.Playlist()
 	switch {
-	case m.section == SectionLibrary && m.drillDown:
+	case m.section == SectionTracks:
+		pl := m.data.Playlist()
 		left = theme.LabelStyle.Render("playlists") + " " + theme.GlyphCrumb + " " +
 			theme.TitleStyle.Render(truncate(pl.Name, w/3)) + "  " +
 			theme.MetaStyle.Render(pl.Owner+" · private")
 		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s", len(pl.Tracks), fmtTotal(totalDuration(pl.Tracks)))) +
 			" " + theme.LabelStyle.Render(theme.GlyphDivider) + " " +
 			theme.MetaStyle.Render("sort: added "+theme.GlyphSortDesc)
-	case m.section == SectionLibrary:
-		left = theme.TitleStyle.Render("library")
-		right = theme.MetaStyle.Render(fmt.Sprintf("%d sections", len(m.data.Library())))
-	case m.section == SectionSearch:
-		left = theme.TitleStyle.Render("search")
-		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks", len(m.tracksForView())))
 	default:
-		left = theme.TitleStyle.Render("queue")
-		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s",
-			len(m.data.Queue()), fmtTotal(totalDuration(m.data.Queue()))))
+		// Playlists navigation
+		left = theme.TitleStyle.Render("playlists")
+		right = theme.MetaStyle.Render(fmt.Sprintf("%d sections", len(m.data.Library())))
 	}
 	if lw, rw := visibleWidth(left), visibleWidth(right); lw+rw+1 > w {
 		return theme.ValueStyle.Render(truncate(stripANSI(left), w))
@@ -313,14 +308,39 @@ func (m Model) contextStrip(w int) string {
 	return padRight(left, w-visibleWidth(right)) + right
 }
 
-// realContextStrip is the context strip over catalog state (T7): the playlist
-// drill-down carries owner and privacy, the playlists panel the fetched total,
-// search the query and its counts. Total time only shows when the whole list
-// is loaded — a partial page cannot claim the total.
+// realContextStrip is the context strip over catalog state (T7): the Tracks
+// view carries the open playlist with owner and privacy, the Playlists panel
+// the fetched total, and the search results the query and its group counts
+// (T19). Total time only shows when the whole list is loaded — a partial page
+// cannot claim the total.
 func (m Model) realContextStrip(w int) string {
 	var left, right string
 	switch {
-	case m.section == SectionLibrary && m.drillDown:
+	case m.sView:
+		left = theme.LabelStyle.Render("search") + " " + theme.GlyphCrumb + " " +
+			theme.TitleStyle.Render(truncate(m.sQuery, w/3))
+		switch {
+		case m.sLoading && m.searchLoaded() == 0:
+			right = theme.MetaStyle.Render("searching…")
+		case m.sErr != nil:
+			if m.sRateLimited {
+				right = theme.MetaStyle.Render("rate limited")
+			} else {
+				right = theme.MetaStyle.Render("search failed")
+			}
+		default:
+			right = theme.MetaStyle.Render(fmt.Sprintf("%d track%s · %d album%s",
+				len(m.sTracks), plural(len(m.sTracks)), len(m.sAlbums), plural(len(m.sAlbums))))
+			if len(m.sPlaylists) > 0 {
+				right = theme.MetaStyle.Render(fmt.Sprintf("%d track%s · %d album%s · %d playlist%s",
+					len(m.sTracks), plural(len(m.sTracks)), len(m.sAlbums), plural(len(m.sAlbums)),
+					len(m.sPlaylists), plural(len(m.sPlaylists))))
+			}
+		}
+	case m.section == SectionTracks && m.plID == "":
+		left = theme.TitleStyle.Render("tracks")
+		right = theme.MetaStyle.Render("no playlist open")
+	case m.section == SectionTracks:
 		left = theme.LabelStyle.Render("playlists") + " " + theme.GlyphCrumb + " " +
 			theme.TitleStyle.Render(truncate(m.plName, w/3)) + "  " +
 			theme.MetaStyle.Render(m.plOwner+" · "+m.privacyWord())
@@ -328,8 +348,9 @@ func (m Model) realContextStrip(w int) string {
 		if m.plNext < 0 && m.plItemsErr == nil && len(m.plTracks) > 0 {
 			right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s", m.plTotal, fmtTotal(totalDuration(m.plTracks))))
 		}
-	case m.section == SectionLibrary:
-		left = theme.TitleStyle.Render("library")
+	default:
+		// Playlists navigation
+		left = theme.TitleStyle.Render("playlists")
 		switch {
 		case m.plsErr != nil:
 			right = theme.MetaStyle.Render("could not load")
@@ -338,22 +359,19 @@ func (m Model) realContextStrip(w int) string {
 		default:
 			right = theme.MetaStyle.Render(fmt.Sprintf("%d playlists", m.plsTotal))
 		}
-	case m.section == SectionSearch:
-		left = theme.TitleStyle.Render("search")
-		if m.sQuery != "" {
-			left = theme.LabelStyle.Render("search") + " " + theme.GlyphCrumb + " " +
-				theme.TitleStyle.Render(truncate(m.sQuery, w/3))
-		}
-		right = theme.MetaStyle.Render(fmt.Sprintf("%d of %d tracks", len(m.sTracks), m.sTotals.Tracks))
-	default:
-		left = theme.TitleStyle.Render("queue")
-		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s",
-			len(m.data.Queue()), fmtTotal(totalDuration(m.data.Queue()))))
 	}
 	if lw, rw := visibleWidth(left), visibleWidth(right); lw+rw+1 > w {
 		return theme.ValueStyle.Render(truncate(stripANSI(left), w))
 	}
 	return padRight(left, w-visibleWidth(right)) + right
+}
+
+// plural is the singular/plural tail of a count fact.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // privacyWord renders the playlist privacy fact (never invented: collab wins).
@@ -392,7 +410,10 @@ func (m Model) listBody(h int) []string {
 	rows := m.visibleRows()
 	out := make([]string, 0, h)
 	dataRows := h
-	inTrackView := !(m.section == SectionLibrary && !m.drillDown)
+	// The table header belongs to a track list: the Tracks view (open playlist
+	// or the mock's open list). The results view renders mixed kinds, the
+	// Playlists navigation its own groups — no header there.
+	inTrackView := m.section == SectionTracks && !m.sView
 	if inTrackView {
 		out = append(out, tableHeader(tableLayout(m.w)))
 		dataRows--
@@ -499,14 +520,15 @@ func savedGlyph(saved bool) string {
 
 // libraryRow renders library-root rows: section headers and collection items,
 // name left, count right (DESIGN §7 library view). Real playlist rows carry a
-// meta segment (owner · privacy · count) instead of the bare count.
+// meta segment (owner · privacy · count) instead of the bare count; search
+// result albums and playlists reuse the same item shape with their meta.
 func (m Model) libraryRow(r row, selected bool) string {
 	w := m.w
 	indent := " "
-	if r.kind == rowPlaylistItem {
+	if r.kind == rowPlaylistItem || r.kind == rowAlbumItem {
 		indent = "   "
 	}
-	if r.kind == rowPlaylistItem && r.meta != "" {
+	if (r.kind == rowPlaylistItem || r.kind == rowAlbumItem) && r.meta != "" {
 		line := truncate(indent+r.text, w-visibleWidth(r.meta)-3)
 		plain := padRight(line, w-1-visibleWidth(r.meta)) + r.meta
 		if selected {
@@ -521,7 +543,7 @@ func (m Model) libraryRow(r row, selected bool) string {
 		return theme.SelectedStyle.Width(w).Render(plain)
 	}
 	name := theme.LabelStyle.Render(indent + r.text)
-	if r.kind == rowPlaylistItem {
+	if r.kind == rowPlaylistItem || r.kind == rowAlbumItem {
 		name = theme.ValueStyle.Render(indent + r.text)
 	}
 	return padRight(name, w-9) + theme.NumberStyle.Render(padLeft(count, 8))
@@ -700,12 +722,12 @@ func (m Model) statusBar(w int) string {
 	var left string
 	switch {
 	case m.win == winSearch:
-		apply := "enter apply · esc cancel"
-		if m.fetch != nil {
-			apply = "enter search · esc close"
+		hint := "enter results · esc close"
+		if m.fetch == nil {
+			hint = "enter apply · esc cancel"
 		}
 		left = theme.AccentStyle.Render("/ "+truncate(m.filter, w/2)) + "   " +
-			theme.LabelStyle.Render(apply)
+			theme.LabelStyle.Render(hint)
 	case m.toast.text != "":
 		left = theme.ValueStyle.Render(truncate(m.toast.text, w))
 	default:
@@ -732,25 +754,20 @@ func (m Model) keyHints(maxWidth int) string {
 }
 
 func (m Model) viewState() string {
+	if m.sView {
+		return "search / " + strings.ToLower(truncate(m.sQuery, 24))
+	}
 	switch m.section {
-	case SectionSearch:
-		if m.fetch != nil && m.sQuery != "" {
-			return "search / " + strings.ToLower(truncate(m.sQuery, 24))
-		}
-		return "search"
-	case SectionQueue:
-		return "queue"
+	case SectionPlaylists:
+		return "playlists"
 	default:
 		if m.fetch != nil {
-			if m.drillDown {
-				return "library / " + strings.ToLower(truncate(m.plName, 32))
+			if m.plName != "" {
+				return "tracks / " + strings.ToLower(truncate(m.plName, 32))
 			}
-			return "library"
+			return "tracks"
 		}
-		if m.drillDown {
-			return "library / " + strings.ToLower(m.data.Playlist().Name)
-		}
-		return "library"
+		return "tracks / " + strings.ToLower(m.data.Playlist().Name)
 	}
 }
 
