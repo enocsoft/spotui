@@ -560,3 +560,46 @@ func TestLoginViewShowsWhichLoginAsks(t *testing.T) {
 		t.Errorf("an unlabeled login must default to playback, got:\n%s", m.View())
 	}
 }
+
+// TestOpenKeyLaunchesTheBrowser: the login screen must be able to open the
+// authorization URL with `o`, with the URL as a single argv entry (no shell), and
+// the key must do nothing anywhere else.
+func TestOpenKeyLaunchesTheBrowser(t *testing.T) {
+	prev := openInBrowser
+	t.Cleanup(func() { openInBrowser = prev })
+
+	var opened []string
+	openInBrowser = func(u string) error { opened = append(opened, u); return nil }
+
+	const url = "https://accounts.spotify.com/authorize?client_id=abc&response_type=code&state=s"
+	m := newModel(t, 180, 50)
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventLogin, LoginURL: url, LoginFile: "/state/login-url.txt"}})
+	*m = updated.(Model)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("pressing o on the login screen must return a command")
+	}
+	if msg := cmd(); msg != nil {
+		if _, ok := msg.(browserOpenedMsg); !ok {
+			t.Fatalf("expected browserOpenedMsg, got %T", msg)
+		}
+	}
+	if len(opened) != 1 || opened[0] != url {
+		t.Fatalf("opener received %v, want exactly the login URL", opened)
+	}
+
+	// outside the login screen the key is inert
+	opened = nil
+	m2 := newModel(t, 180, 50)
+	if _, cmd := m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}); cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(browserOpenedMsg); ok {
+				t.Fatalf("o must not open anything outside the login screen")
+			}
+		}
+	}
+	if len(opened) != 0 {
+		t.Fatalf("opener was called outside the login screen: %v", opened)
+	}
+}

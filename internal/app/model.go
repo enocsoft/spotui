@@ -308,6 +308,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case savedMsg:
 		return m, m.applySaved(msg)
 
+	case browserOpenedMsg:
+		if msg.err != nil {
+			return m, m.setToast("✗ could not open the browser · the URL is in " + m.loginFile)
+		}
+		return m, m.setToast("opened the authorization page in your browser")
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -366,6 +372,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuildShuffle()
 		if m.section == SectionPlaylists {
 			cmd = m.ensurePlaylistsLoaded()
+		}
+	case "o":
+		// Only the login screen has a URL worth opening.
+		if m.loginURL != "" {
+			cmd = openBrowserCmd(m.loginURL)
 		}
 	case "q":
 		m.drawerOpen = !m.drawerOpen

@@ -195,7 +195,7 @@ func (m Model) loginView() string {
 			" — playback starts when you return"),
 		"",
 		theme.MetaStyle.Render("build "+Revision()),
-		theme.LabelStyle.Render("ctrl+c quit"),
+		theme.LabelStyle.Render("o open in browser · ctrl+c quit"),
 	)
 	return m.messageView(lines)
 }
