@@ -44,7 +44,7 @@ S19. Search, el palette de comandos, el selector de salida y la ayuda son **vent
 | T8 | Estados de restricción en la UI: playlist sin items (no sos owner), búsqueda paginada de a 10, campos ausentes (`popularity`, `followers`) leídos como opcionales | S14 | pendiente | — |
 | T12 | Ventanas flotantes reales: search, palette, output picker y ayuda con borde cerrado y centrado, en vez de renderizar en el lugar de la lista | S19 | entregado | — |
 | T13 | `:play <spotify:track:ID>` en el palette para poder escuchar hoy, antes del catálogo real | S1, S16 | entregado | — |
-| T14 | README: declarar que es un cliente no oficial (S17) y que **CGO_ENABLED=0 no compila** | S17 | pendiente | — |
+| T14 | README: declarar que es un cliente no oficial (S17) y que **CGO_ENABLED=0 no compila** | S17 | entregado | — |
 
 ## Log
 
@@ -91,3 +91,5 @@ L16 (estado honesto del sonido): el motor ya reproduce un track real por URI, pe
 L17 (T12+T13 entregados, verificados por el padre): un solo componente de ventana flotante (`internal/app/window.go`) sirve `/`, `:`, `d` y `?`: borde cerrado, centrada, dimensionada al contenido con tope `min(104, w-4) × min(14, h-6)`, una a la vez, `esc` restaura el frame exacto (cursor y offset de la lista intactos). `:play` acepta `spotify:track:<id>` o base62 de 22 caracteres; entrada inválida da toast con lo esperado. `library.ParseTrackID` es ahora la lógica compartida con `player.ParseSpotifyTrackID`. Verificación propia: `gofmt` limpio, `go vet` rc=0, `go test -count=1 ./...` rc=0, `CGO_ENABLED=1 go build ./...` rc=0, y render real capturado en tmux con `SPOTIFY_TUI_MOCK=1`: paleta abierta a 180x50 y a 80x24 → 50/24 líneas exactas, 180/80 columnas, caja cerrada, lista de atrás sin moverse.
 
 L18 (ajuste de diseño derivado del código): DESIGN.md decía que el palette mide 104 columnas fijas, y la implementación lo dimensiona al contenido. Manda la regla "sizes to its content, never to the screen", así que corregí el doc: hasta 104 de tope, angosto cuando el contenido es una línea. Un panel fijo de 104 celdas con un hint de una línea es espacio muerto.
+
+L19 (T14 entregado): `README.md` en la raíz declara el cliente como **no oficial** y de uso personal no comercial (S17), el requisito de Premium, el aviso de que `CGO_ENABLED=0` no compila, el setup exacto del dashboard (redirect `http://127.0.0.1:8888/login`, no `localhost`), el formato de `config.toml`, la tabla de teclas y el estado honesto: biblioteca mock, `:play` para escuchar hoy.
