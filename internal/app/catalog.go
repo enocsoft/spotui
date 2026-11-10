@@ -612,7 +612,8 @@ func (m Model) errorStatusRow(err error) row {
 }
 
 func (m Model) trackRows() []row {
-	tracks := m.orderedTracks()
+	// Base order always: shuffle permutes only the playback order (C).
+	tracks := m.viewTracks()
 	rows := make([]row, 0, len(tracks)+2)
 	switch {
 	case m.section == SectionTracks && m.plID == "":
@@ -698,7 +699,7 @@ func (m Model) searchResultRows() []row {
 	}
 	if len(m.sTracks) > 0 {
 		rows = append(rows, row{kind: rowHeader, text: theme.GlyphExpanded + " TRACKS", count: len(m.sTracks)})
-		for i, t := range m.orderedTracks() {
+		for i, t := range m.viewTracks() {
 			rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID), match: m.sQuery})
 		}
 	}

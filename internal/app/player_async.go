@@ -20,12 +20,10 @@ import (
 type playerOp uint8
 
 const (
-	opPlay        playerOp = iota // playRow: list rows, search results, shuffle walks
+	opPlay        playerOp = iota // playRow: list rows, search results, playback walks
 	opPlayContext                 // the :play context resolve's first playable track (no radio seed)
 	opEnqueue
 	opPause
-	opNext
-	opPrev
 	opVolumeUp
 	opVolumeDown
 	opRadioPlay // the radio boundary's resolved track; carries its latch id
@@ -82,12 +80,14 @@ func (m *Model) applyPlayerMsg(msg playerMsg) tea.Cmd {
 		if msg.err != nil {
 			return m.setToast("✗ " + msg.err.Error())
 		}
+		m.lastPlayed = msg.track.ID
 		m.notePlayed(msg.track.ID)
 		return m.setToast("▶ " + playLabel(msg.track))
 	case opPlayContext:
 		if msg.err != nil {
 			return m.setToast("✗ " + msg.err.Error())
 		}
+		m.lastPlayed = msg.track.ID
 		return m.setToast("▶ " + playLabel(msg.track))
 	case opEnqueue:
 		if msg.err != nil {
@@ -104,14 +104,6 @@ func (m *Model) applyPlayerMsg(msg playerMsg) tea.Cmd {
 			return m.setToast("paused")
 		}
 		return m.setToast("playing")
-	case opNext, opPrev:
-		if msg.err != nil {
-			return m.setToast("✗ " + msg.err.Error())
-		}
-		if t, ok := m.currentTrack(); ok {
-			return m.setToast("▶ " + t.Title)
-		}
-		return nil
 	case opVolumeUp, opVolumeDown:
 		if msg.err != nil {
 			return m.setToast("✗ " + msg.err.Error())
@@ -130,6 +122,7 @@ func (m *Model) applyPlayerMsg(msg playerMsg) tea.Cmd {
 			return m.setToast("✗ radio: " + msg.err.Error())
 		}
 		m.notePlayed(msg.track.ID)
+		m.lastPlayed = msg.track.ID
 		return m.setToast("▶ " + playLabel(msg.track))
 	}
 	return nil

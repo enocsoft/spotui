@@ -1,20 +1,22 @@
 package app
 
-// Radio (T26): `R` toggles autoplay continuation — put on any track and keep
-// going after it ends. Off by default. The player events carry no
-// "track ended" signal (only Play/Resume/Pause/Stop/NotPlaying), so the
-// boundary is derived from the existing one-second state tick: when the
-// reported position reaches the duration, the track is over — the same read
-// covers a track that stops parked at its end with nothing queued, because
-// the position still sits at the duration. A user pause lands mid-track and
-// never reaches it.
+// Radio (T26 + the B/D revision): `R` toggles autoplay continuation — put on
+// any track and keep going after it ends. On by default, like Spotify: a
+// playlist, an album or a single track continues with related tracks when
+// the current context ends. The player events carry no "track ended" signal
+// (only Play/Resume/Pause/Stop/NotPlaying), so the boundary is derived from
+// the existing one-second state tick: when the reported position reaches the
+// duration, the track is over — the same read covers a track that stops
+// parked at its end with nothing queued, because the position still sits at
+// the duration. A user pause lands mid-track and never reaches it.
 //
-// On the boundary the injectable autoplay resolver asks Spotify for the next
-// related context and the first playable result plays through the existing
-// play path. Radio plays outside the view: the open list never changes, the
-// drawer shows what radio has lined up while it is active. Failure is
-// honest: a resolve that fails toasts naming it and radio stops — never a
-// retry loop.
+// On the boundary — and on `n` when the playback order ran out (the D
+// revision, radioStep) — the injectable autoplay resolver asks Spotify for
+// the next related context and the first playable result plays through the
+// existing play path. Radio plays outside the view: the open list never
+// changes, the drawer shows what radio has lined up while it is active.
+// Failure is honest: a resolve that fails toasts naming it and radio stops —
+// never a retry loop.
 
 import (
 	"context"
@@ -39,7 +41,7 @@ const radioEndTolerance = 5 * time.Second
 
 // onRadio is `R`: toggle radio. Turning it off restores the normal
 // end-of-list behaviour — the session stops when nothing is queued. No
-// persistence between restarts, exactly like shuffle.
+// persistence between restarts, exactly like shuffle. The default is on (B).
 func (m *Model) onRadio() tea.Cmd {
 	m.radioOn = !m.radioOn
 	m.radioFiredID = ""
@@ -89,6 +91,41 @@ func (m *Model) radioCheck() tea.Cmd {
 	m.radioFiredID = s.TrackID
 	debugf("radio: boundary FIRE for %q", s.TrackID)
 	return m.radioResolveCmd(s.TrackID)
+}
+
+// radioStep continues playback through the resolver: the same path the
+// end-of-track boundary uses, driven by `n` when the playback order ran out
+// (the D revision). The seed is the track that will have just played — a
+// walk already in flight first (the session has not learned about it yet),
+// else the playing track, else the cursor's. With radio off, or no resolver
+// wired, the toast says so and nothing plays — one toast, no dead-end.
+func (m *Model) radioStep() tea.Cmd {
+	seedID := ""
+	if n := len(m.walks); n > 0 {
+		seedID = m.walks[n-1]
+	}
+	if seedID == "" {
+		seedID = m.data.Session().TrackID
+	}
+	if seedID == "" {
+		seedID = m.lastPlayed
+	}
+	if seedID == "" {
+		if t, ok := m.trackUnderCursor(); ok {
+			seedID = t.ID
+		}
+	}
+	if seedID == "" {
+		return m.setToast("nothing left to play")
+	}
+	if !m.radioOn {
+		return m.setToast("nothing left to play · R turns radio on")
+	}
+	if m.autoplay == nil {
+		return m.setToast("nothing left to play · radio is not available here")
+	}
+	m.radioFiredID = seedID
+	return m.radioResolveCmd(seedID)
 }
 
 // radioResolveCmd asks the resolver for the next related context: the

@@ -80,6 +80,10 @@ type Model struct {
 	// where the first press left off, not from the session the player has
 	// not updated yet (two rapid presses stay two skips).
 	walks []string
+	// lastPlayed is the track the app last successfully asked to play (walk,
+	// radio or :play). It resolves the playback position when the session
+	// snapshot does not reflect the play (it can lag the queue by a beat).
+	lastPlayed string
 
 	eventCh   <-chan library.Event // real-player events; nil for the mock
 	loginURL  string               // non-empty: full-screen login state (S9)
@@ -185,24 +189,25 @@ type Model struct {
 	// the server does (Mirror Rule); on failure nothing to revert, just toast.
 	pendingSaved map[string]bool
 
-	// Shuffle (T21): `s` toggles shuffle over the open view's playable rows.
-	// Our order owns playback: while it is on, the list and the drawer render
-	// in the shuffled order and n/p walk it. shuffleOrd maps visible position
-	// -> base index and is rebuilt on every view change; perm is the
+	// Shuffle (T21 + C): `s` toggles shuffle over the open view's playable
+	// rows. The visible list never moves — shuffle permutes only the playback
+	// order that `n`/`p` walk and the drawer mirrors. shuffleOrd maps playback
+	// position -> base index and is rebuilt on every view change; perm is the
 	// injectable permutation generator (seeded, so tests are deterministic).
 	shuffleOn  bool
 	shuffleOrd []int
 	perm       func(n int, seed int64) []int
 
-	// Radio (T26): `R` toggles autoplay continuation. Off by default. Radio
-	// plays outside the open list: at the end-of-track boundary (derived from
-	// the one-second state tick, the only signal the player events carry) the
-	// injectable autoplay resolver asks Spotify for the next related context
-	// and the first playable result plays through the existing play path.
-	// radioUpNext is what radio has lined up, what the drawer shows while it
-	// is active; radioFiredID latches the boundary so it fires exactly once
-	// per track; radioRecent holds the recently played track uris the resolve
-	// is seeded with.
+	// Radio (T26 + B): `R` toggles autoplay continuation. On by default, like
+	// Spotify: a playlist, an album or a single track continues with related
+	// tracks when the current context ends. Radio plays outside the open list:
+	// at the end-of-track boundary (derived from the one-second state tick,
+	// the only signal the player events carry) the injectable autoplay resolver
+	// asks Spotify for the next related context and the first playable result
+	// plays through the existing play path. radioUpNext is what radio has
+	// lined up, what the drawer shows while it is active; radioFiredID latches
+	// the boundary so it fires exactly once per track; radioRecent holds the
+	// recently played track uris the resolve is seeded with.
 	radioOn      bool
 	radioUpNext  []library.Track
 	radioFiredID string
@@ -230,6 +235,7 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 		pendingSaved: map[string]bool{},
 		perm:         seededPerm,
 		pq:           &playerQueue{},
+		radioOn:      true, // B: autoplay starts enabled, like Spotify
 	}
 	// Real mode: the player exposes the Web API catalog (T7) and the app starts
 	// on the playlists navigation. Mock mode keeps the artboard's open list.
@@ -298,10 +304,10 @@ func (m Model) tickCmd() tea.Cmd {
 }
 
 // tickIntervalFor decides the next tick's interval: the live poll while
-// playing (progress) and whenever radio is on (the boundary detector), the
-// slow idle refresh otherwise.
+// playing (progress) and whenever radio is on with a resolver wired (the
+// boundary detector), the slow idle refresh otherwise.
 func (m Model) tickIntervalFor() time.Duration {
-	if m.radioOn || m.data.Session().State == library.StatePlaying {
+	if (m.radioOn && m.autoplay != nil) || m.data.Session().State == library.StatePlaying {
 		return tickInterval
 	}
 	return idleRefresh

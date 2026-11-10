@@ -188,10 +188,10 @@ func (p *orderedPlayer) unblockNext() {
 	}
 }
 
-// TestTickCadenceFollowsTheSession: an idle session — paused or stopped, no
-// radio — must not re-render the whole screen every second. Only a playing
-// session (live progress) and radio (the boundary detector) keep the
-// one-second poll.
+// TestTickCadenceFollowsTheSession: an idle, paused session with radio off
+// must not re-render the whole screen every second. A playing session (live
+// progress) and radio with a resolver (the boundary detector) keep the
+// one-second poll — and radio starts on (B).
 func TestTickCadenceFollowsTheSession(t *testing.T) {
 	data := newRadioData()
 	rp := &radioPlayer{data: data}
@@ -200,22 +200,23 @@ func TestTickCadenceFollowsTheSession(t *testing.T) {
 		t.Errorf("playing: tick = %v, want the live poll %v", got, tickInterval)
 	}
 	data.session.State = library.StatePaused
+	if got := m.tickIntervalFor(); got != tickInterval {
+		t.Errorf("paused with radio on: tick = %v, want the boundary poll %v", got, tickInterval)
+	}
+	press(t, m, "R") // radio off
 	if got := m.tickIntervalFor(); got != idleRefresh {
 		t.Errorf("paused without radio: tick = %v, want the idle refresh %v", got, idleRefresh)
 	}
-	press(t, m, "R")
-	if got := m.tickIntervalFor(); got != tickInterval {
-		t.Errorf("radio on: tick = %v, want the boundary poll %v", got, tickInterval)
-	}
 }
 
-// TestTwoRapidNextPressesStayOrdered: two `n` presses while the first skip is
-// still in flight must apply as two ordered commands — never interleave into
-// one garbled skip, never race each other. The first press comes back from
-// Update immediately; the second, too; the fake player sees next; next — in
+// TestTwoRapidNextPressesStayOrdered: two `n` presses while the first play is
+// still in flight must apply as two ordered plays — never interleave into one
+// garbled skip, never race each other, and the second walk must continue
+// where the first will land. The first press comes back from Update
+// immediately; the second, too; the fake player sees play t02; play t03 — in
 // exactly that order, even though the test runs the second command first.
 func TestTwoRapidNextPressesStayOrdered(t *testing.T) {
-	p := &orderedPlayer{release: make(chan struct{})}
+	p := &orderedPlayer{}
 	m := asyncModel(t, p)
 
 	first := waitUpdate(t, updateAsync(m, "n"))
@@ -246,22 +247,21 @@ func TestTwoRapidNextPressesStayOrdered(t *testing.T) {
 	secondMsg := run(second.cmd)
 	firstMsg := run(first.cmd)
 
-	p.unblockNext()
 	var got [2]tea.Msg
 	select {
 	case got[0] = <-firstMsg:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the first skip never completed")
+		t.Fatal("the first play never completed")
 	}
 	select {
 	case got[1] = <-secondMsg:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the second skip never completed")
+		t.Fatal("the second play never completed")
 	}
 
-	// The player saw exactly two skips, first press first.
+	// The player saw exactly two ordered plays of the walked rows.
 	calls := p.calls()
-	if len(calls) != 2 || calls[0] != "next" || calls[1] != "next" {
-		t.Fatalf("two rapid `n` presses must apply as two ordered skips, got %v", calls)
+	if len(calls) != 2 || calls[0] != "play t02" || calls[1] != "play t03" {
+		t.Fatalf("two rapid `n` presses must apply as two ordered walks, got %v", calls)
 	}
 }

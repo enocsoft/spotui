@@ -696,16 +696,13 @@ func (m Model) drawerSource() []library.Track {
 }
 
 // drawerRows: up next only; the player bar owns the current track (S4).
-// While radio is active and has lined-up tracks (T26) the drawer shows those:
-// radio plays outside the open list.
+// What the drawer mirrors (C): the shuffled walk while shuffle is on — even
+// when the walk has run out, rather than a queue `n` will never play — what
+// radio has lined up while it is active (T26), else the session queue.
 func (m Model) drawerRows(w int) []string {
 	q := m.drawerSource()
 	if m.shuffleOn && !(m.radioOn && len(m.radioUpNext) > 0) {
-		// Shuffle on: the drawer mirrors the shuffled order — the same walk
-		// `n` takes (T21).
-		if up := m.shuffleUpNext(); len(up) > 0 {
-			q = up
-		}
+		q = m.shuffleUpNext()
 	}
 	if len(q) > drawerRow {
 		q = q[:drawerRow]
@@ -782,9 +779,10 @@ func (m Model) playerBar(w int) []string {
 		mode = "shuffle on · repeat " + s.Repeat
 	}
 	vol := m.volumeCell(s.Volume)
-	// Radio (T26) reports in the live role, next to the shuffle/repeat text;
-	// the word is a state (Never-Color-Alone Rule), no new glyph.
-	radioTxt := ""
+	// Radio (T26) reports its state in the player bar in both directions (B):
+	// on in the live role, off in the meta role — a state, never decoration
+	// (Never-Color-Alone Rule), no new glyph.
+	radioTxt := " · " + theme.MetaStyle.Render("radio off")
 	if m.radioOn {
 		radioTxt = " · " + theme.LiveStyle.Render("radio on")
 	}

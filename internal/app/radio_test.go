@@ -1,12 +1,15 @@
 package app
 
-// T26: radio (autoplay). `R` toggles it; off by default. The end-of-track
-// boundary is derived from the one-second state tick (the player events carry
-// no "track ended" signal): when the reported position reaches the duration
-// the boundary fires exactly once per track, the injectable autoplay resolver
-// asks Spotify for the next related context, and the first playable result
-// plays through the existing play path — outside the open list, which never
-// changes. Resolver failures toast and stop: no retry loop.
+// T26 + the B/D revision: radio (autoplay) starts ON — like Spotify, playing
+// a context continues with related tracks when it ends — and `R` toggles it.
+// The end-of-track boundary is derived from the one-second state tick (the
+// player events carry no "track ended" signal): when the reported position
+// reaches the duration the boundary fires exactly once per track, the
+// injectable autoplay resolver asks Spotify for the next related context,
+// and the first playable result plays through the existing play path —
+// outside the open list, which never changes. Resolver failures toast and
+// stop: no retry loop. The same resolver path serves `n` when the playback
+// order runs out.
 
 import (
 	"os"
@@ -182,41 +185,64 @@ func runRadioCmd(t *testing.T, cmd tea.Cmd) (radioResolvedMsg, bool) {
 	}
 }
 
-// TestRadioTogglePlayerBar: R toggles, off by default, and the player bar
-// reports `radio on` while it is enabled.
+// TestRadioStartsOn (B): autoplay starts enabled — like Spotify — and the
+// player bar reports the state before any key is pressed.
+func TestRadioStartsOn(t *testing.T) {
+	data := newRadioData()
+	rp := &radioPlayer{data: data}
+	m := newRadioModel(t, 180, 50, data, rp)
+	if !m.radioOn {
+		t.Fatal("radio must start on")
+	}
+	if got := stripANSI(strings.Join(lines(m), "\n")); !strings.Contains(got, "radio on") {
+		t.Errorf("the player bar must report radio on from the start, got:\n%s", got)
+	}
+}
+
+// TestRadioTogglePlayerBar: `R` toggles both ways and the player bar follows
+// — `radio off` while off, `radio on` while on.
 func TestRadioTogglePlayerBar(t *testing.T) {
 	data := newRadioData()
 	rp := &radioPlayer{data: data}
 	m := newRadioModel(t, 180, 50, data, rp)
-	if m.radioOn {
-		t.Fatal("radio must start off")
+	if !m.radioOn {
+		t.Fatal("radio must start on")
 	}
-	if strings.Contains(strings.Join(lines(m), "\n"), "radio on") {
-		t.Error("the player bar must not report radio on while it is off")
+	press(t, m, "R")
+	if m.radioOn {
+		t.Error("R must turn radio off")
+	}
+	if m.toast.text != "radio off" {
+		t.Errorf("the toggle must toast, got %q", m.toast.text)
+	}
+	bar := playerBarLines(m)
+	if strings.Contains(bar, "radio on") {
+		t.Errorf("player bar must not report radio on while it is off, got:\n%s", bar)
+	}
+	if !strings.Contains(bar, "radio off") {
+		t.Errorf("player bar must report radio off while it is off, got:\n%s", bar)
 	}
 	press(t, m, "R")
 	if !m.radioOn {
-		t.Error("R must turn radio on")
+		t.Error("a second R must turn radio on again")
 	}
 	if m.toast.text != "radio on" {
 		t.Errorf("the toggle must toast, got %q", m.toast.text)
 	}
+	if bar = playerBarLines(m); !strings.Contains(bar, "radio on") {
+		t.Errorf("player bar must report radio on when enabled, got:\n%s", bar)
+	}
+}
+
+// playerBarLines collects the rendered text of the player bar's mode row.
+func playerBarLines(m *Model) string {
 	var bar strings.Builder
 	for _, l := range lines(m) {
 		if strings.Contains(stripANSI(l), "vol") || strings.Contains(stripANSI(l), "shuffle") {
 			bar.WriteString(stripANSI(l) + "\n")
 		}
 	}
-	if !strings.Contains(bar.String(), "radio on") {
-		t.Errorf("player bar must report radio on when enabled, got:\n%s", bar.String())
-	}
-	press(t, m, "R")
-	if m.radioOn {
-		t.Error("R must turn radio off again")
-	}
-	if m.toast.text != "radio off" {
-		t.Errorf("the toggle must toast, got %q", m.toast.text)
-	}
+	return bar.String()
 }
 
 // TestRadioBoundaryFiresOnce: at the end of the track the boundary fires
@@ -229,7 +255,6 @@ func TestRadioBoundaryFiresOnce(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Artist: "Miles Davis", Album: "Kind of Blue", Duration: 100 * time.Second},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 
 	radioAtEnd(data)
 	msg, fired := runRadioTick(t, m)
@@ -278,7 +303,6 @@ func TestRadioSeedsWithCurrentAndRecent(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: time.Minute},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 
 	// the user played a track through the list first: it lands in the recent
 	// uris the resolver sees
@@ -314,7 +338,6 @@ func TestRadioLeavesOpenListUntouched(t *testing.T) {
 		{ID: "3uLU6hMCjMI75M1A2tKUQC", Title: "Blue in Green", Duration: 2 * time.Minute},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 
 	rowsBefore := len(m.visibleRows())
 	cursorBefore := m.cursor
@@ -351,7 +374,6 @@ func TestRadioOffStopsAtEnd(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: time.Minute},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 	radioAtEnd(data)
 	msg, fired := runRadioTick(t, m)
 	if !fired {
@@ -380,7 +402,6 @@ func TestRadioResolveErrorToastsAndStops(t *testing.T) {
 	data := newRadioData()
 	rp := &radioPlayer{data: data, err: errors.New("autoplay rejected")}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 
 	radioAtEnd(data)
 	msg, fired := runRadioTick(t, m)
@@ -422,13 +443,12 @@ func TestRadioFiresWhenTrackStopsParkedAtEnd(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: time.Minute},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	// user pause mid-track: not an end
+	// user pause mid-track: not an end (radio is on by default)
 	data.session.State = library.StatePaused
 	if _, fired := runRadioTick(t, m); fired {
 		t.Fatal("a user pause mid-track must not fire the boundary")
 	}
-	// press R, then park the track at its end: the boundary fires
-	press(t, m, "R")
+	// park the track at its end: the boundary fires
 	radioAtEnd(data)
 	msg, fired := runRadioTick(t, m)
 	if !fired {
@@ -442,20 +462,85 @@ func TestRadioFiresWhenTrackStopsParkedAtEnd(t *testing.T) {
 	}
 }
 
-// TestRadioOffByDefaultNeverFires: without radio the same ended track does
+// TestRadioOffNeverFires: with radio toggled off the same ended track does
 // nothing — the normal end-of-list behaviour the toggle restores.
-func TestRadioOffByDefaultNeverFires(t *testing.T) {
+func TestRadioOffNeverFires(t *testing.T) {
 	data := newRadioData()
 	rp := &radioPlayer{data: data, next: []library.Track{
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: time.Minute},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "R") // radio off
 	radioAtEnd(data)
 	if _, fired := runRadioTick(t, m); fired {
 		t.Fatal("radio off must never fire the boundary")
 	}
 	if len(rp.calls) != 0 {
 		t.Errorf("radio off must never call the resolver, called %d times", len(rp.calls))
+	}
+}
+
+// TestNOnSingleTrackContinuesThroughResolver (D): the playback order holds a
+// single track and it is playing — `n` does not dead-end: it resolves the
+// related context from the current track, the same path the end-of-track
+// boundary uses, and the first resolved track plays.
+func TestNOnSingleTrackContinuesThroughResolver(t *testing.T) {
+	data := newRadioData() // the fixture playlist holds exactly one track
+	rp := &radioPlayer{data: data, next: []library.Track{
+		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: time.Minute},
+	}}
+	m := newRadioModel(t, 180, 50, data, rp)
+	if got := len(trackIDs(m)); got != 1 {
+		t.Fatalf("mock setup: single-track view, got %d rows", got)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	*m = updated.(Model)
+	msg, ok := runRadioCmd(t, cmd)
+	if !ok {
+		t.Fatal("`n` on a single-track view must continue through the resolver")
+	}
+	if len(rp.calls) != 1 || !strings.HasPrefix(rp.calls[0], "spotify:track:"+realTrackID+"|") {
+		t.Fatalf("the resolve must be seeded from the current track, calls %v", rp.calls)
+	}
+	updated, cmd = m.Update(msg)
+	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
+	if len(rp.played) != 1 || rp.played[0].ID != realTrackID2 {
+		t.Fatalf("the resolved track must play, played %v", rp.played)
+	}
+	if data.session.TrackID != realTrackID2 {
+		t.Errorf("the session must mirror the radio track, got %q", data.session.TrackID)
+	}
+}
+
+// TestNWithRadioOffToastsOnExhaustedOrder (D): with radio off and nothing
+// left in the playback order, `n` says so in one toast and plays nothing.
+func TestNWithRadioOffToastsOnExhaustedOrder(t *testing.T) {
+	data := newRadioData() // single track: the order is exhausted right away
+	rp := &radioPlayer{data: data}
+	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "R") // radio off
+	press(t, m, "n")
+	if len(rp.played) != 0 || len(rp.calls) != 0 {
+		t.Fatalf("nothing may play or resolve with radio off, played %v, calls %v", rp.played, rp.calls)
+	}
+	if !strings.Contains(m.toast.text, "nothing left to play") {
+		t.Errorf("the exhausted order must toast, got %q", m.toast.text)
+	}
+}
+
+// TestPrevStopsAtTheStartWithAToast (D): `p` mirrors `n` backwards and stops
+// at the start of the playback order with an honest toast.
+func TestPrevStopsAtTheStartWithAToast(t *testing.T) {
+	data := newRadioData()
+	rp := &radioPlayer{data: data}
+	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "p")
+	if len(rp.played) != 0 {
+		t.Fatalf("`p` at the start must not play, played %v", rp.played)
+	}
+	if !strings.Contains(m.toast.text, "start") {
+		t.Errorf("the toast must say the walk is at the start, got %q", m.toast.text)
 	}
 }
 
@@ -468,7 +553,6 @@ func TestRadioStaleResolveKeepsTheTickAlive(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 	radioAtEnd(data)
 
 	msg, fired := runRadioTick(t, m)
@@ -499,7 +583,6 @@ func TestRadioStaleResolveDoesNotInterruptANewTrack(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 	radioAtEnd(data)
 
 	msg, fired := runRadioTick(t, m)
@@ -527,7 +610,6 @@ func TestRadioPlayFailureStopsRadio(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 	radioAtEnd(data)
 
 	msg, fired := runRadioTick(t, m)
@@ -571,7 +653,6 @@ func TestRadioFiresWhenThePositionStopsShortOfTheEnd(t *testing.T) {
 		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
 	}}
 	m := newRadioModel(t, 180, 50, data, rp)
-	press(t, m, "R")
 
 	radioAtEnd(data)
 	data.session.Elapsed = data.session.Total - 2*time.Second // the real-world gap

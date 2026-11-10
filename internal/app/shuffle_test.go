@@ -1,11 +1,13 @@
 package app
 
-// Shuffle tests (T21): `s` toggles shuffle over the open view's playable
-// rows. The permutation generator is injected (reversePerm) so every order
-// here is deterministic. Semantics under test: while shuffle is on, OUR
-// order owns playback — the list, the drawer and n/p follow the shuffled
-// list through the existing play path; with shuffle off, today's behaviour
-// stands exactly.
+// Shuffle tests (T21 + the C/D revision): `s` toggles shuffle over the open
+// view's playable rows. The permutation generator is injected (reversePerm)
+// so every order here is deterministic. Semantics under test: the visible
+// list never moves — Spotify keeps the list in its own order and shuffles
+// only what plays next — while the playback order (what `n`/`p` walk and the
+// drawer mirrors) is the shuffled permutation. With shuffle off the playback
+// order is the view's base order; there is no session-queue dependence left
+// in `n`/`p`, so an exhausted order never dead-ends silently.
 
 import (
 	"errors"
@@ -39,87 +41,110 @@ func trackIDs(m *Model) []string {
 	return ids
 }
 
-// TestShuffleTogglePermutesDeterministically: `s` with an injected generator
-// builds a deterministic permutation of the view's playable rows and keeps
-// the playing row (t01, position 0) at its position.
-func TestShuffleTogglePermutesDeterministically(t *testing.T) {
+// trackIDsOf lists the ids of a track slice (the playback order).
+func trackIDsOf(tracks []library.Track) []string {
+	ids := make([]string, len(tracks))
+	for i, t := range tracks {
+		ids[i] = t.ID
+	}
+	return ids
+}
+
+// equalIDs reports whether two id slices are identical.
+func equalIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestShuffleToggleKeepsTheListInBaseOrder (C): `s` leaves the visible list
+// in its base order — the list is where it is, only what plays next is
+// shuffled — and the cursor stays on the same row. The playback order (what
+// `n`/`p` walk) is the deterministic permutation: the playing track keeps
+// its base position, the rest is reversed by the injected generator.
+func TestShuffleToggleKeepsTheListInBaseOrder(t *testing.T) {
 	m := newModel(t, 180, 50)
 	base := trackIDs(m)
 	if len(base) != 42 {
 		t.Fatalf("mock setup: 42 tracks, got %d", len(base))
 	}
-	var seeds []int64
-	m.perm = func(n int, seed int64) []int {
-		seeds = append(seeds, seed)
-		return reversePerm(n, seed)
-	}
+	m.perm = reversePerm
 	press(t, m, "s")
 	if !m.shuffleOn {
 		t.Fatal("after `s` shuffle must be on")
 	}
-	if len(seeds) == 0 || seeds[0] == 0 {
-		t.Fatalf("the generator must be called with a seed, got %v", seeds)
+	if got := trackIDs(m); !equalIDs(got, base) {
+		t.Fatalf("shuffling must not move the visible rows, got %v", got)
 	}
-	got := trackIDs(m)
-	if len(got) != len(base) {
-		t.Fatalf("shuffle permutes, never drops rows: got %d rows, want %d", len(got), len(base))
+	if m.cursor != 0 {
+		t.Errorf("toggling shuffle on must not move the cursor: %d, was 0", m.cursor)
 	}
-	if got[0] != "t01" {
-		t.Errorf("the playing row must keep its position: got[0] = %q, want t01", got[0])
+	order := trackIDsOf(m.orderedTracks())
+	if len(order) != len(base) {
+		t.Fatalf("the playback order permutes, never drops rows: got %d, want %d", len(order), len(base))
 	}
-	// reversePerm over the rest (base indices 1..41 reversed): visible
-	// position i>0 must hold base row len(base)-i, deterministically.
-	for i := 1; i < len(got); i++ {
-		if want := base[len(base)-i]; got[i] != want {
-			t.Errorf("position %d: got %q, want %q (deterministic reversal)", i, got[i], want)
+	if order[0] != "t01" {
+		t.Errorf("the playing track keeps its position in the playback order: got[0] = %q, want t01", order[0])
+	}
+	for i := 1; i < len(order); i++ {
+		if want := base[len(base)-i]; order[i] != want {
+			t.Errorf("playback position %d: got %q, want %q (deterministic reversal)", i, order[i], want)
 		}
 	}
-}
-
-// TestShuffleOffRestoresOriginalOrder: a second `s` clears the mode and the
-// permutation, and restores the exact original order.
-func TestShuffleOffRestoresOriginalOrder(t *testing.T) {
-	m := newModel(t, 180, 50)
-	base := trackIDs(m)
-	m.perm = reversePerm
-	press(t, m, "s")
 	press(t, m, "s")
 	if m.shuffleOn {
 		t.Fatal("a second `s` must turn shuffle off")
 	}
+	if got := trackIDs(m); !equalIDs(got, base) {
+		t.Fatalf("the visible rows never move, in either direction: got %v", got)
+	}
+	if order := trackIDsOf(m.orderedTracks()); !equalIDs(order, base) {
+		t.Fatalf("shuffle off restores the playback order exactly, got %v", order)
+	}
 	if m.shuffleOrd != nil {
 		t.Error("the permutation must be cleared when shuffle turns off")
 	}
-	got := trackIDs(m)
-	for i := range base {
-		if got[i] != base[i] {
-			t.Fatalf("position %d: got %q, want %q — the original order must be restored exactly", i, got[i], base[i])
-		}
+	if m.cursor != 0 {
+		t.Errorf("toggling shuffle off must not move the cursor: %d, was 0", m.cursor)
 	}
 }
 
-// TestShuffleCursorFollowsTrack: the cursor stays on the same track through
-// both directions of the toggle — it follows the track, not its index.
-func TestShuffleCursorFollowsTrack(t *testing.T) {
+// TestShuffleCursorDoesNotMoveOnToggle (C): the cursor stays exactly where
+// it is — same index, same track — through both directions of the toggle.
+func TestShuffleCursorDoesNotMoveOnToggle(t *testing.T) {
 	m := newModel(t, 180, 50)
 	press(t, m, "j")
-	press(t, m, "j") // cursor on t03
+	press(t, m, "j") // cursor on t03, row index 2
 	if before, ok := m.trackUnderCursor(); !ok || before.ID != "t03" {
 		t.Fatalf("mock setup: cursor on t03, got %q (ok=%v)", before.ID, ok)
 	}
+	cursor := m.cursor
 	m.perm = reversePerm
 	press(t, m, "s")
+	if m.cursor != cursor {
+		t.Errorf("toggling shuffle on must not move the cursor: %d, was %d", m.cursor, cursor)
+	}
 	if after, ok := m.trackUnderCursor(); !ok || after.ID != "t03" {
 		t.Errorf("after shuffling the cursor must stay on t03, got %q (ok=%v)", after.ID, ok)
 	}
 	press(t, m, "s")
+	if m.cursor != cursor {
+		t.Errorf("toggling shuffle off must not move the cursor: %d, was %d", m.cursor, cursor)
+	}
 	if after, ok := m.trackUnderCursor(); !ok || after.ID != "t03" {
 		t.Errorf("after unshuffling the cursor must stay on t03, got %q (ok=%v)", after.ID, ok)
 	}
 }
 
 // TestShuffleNextWalksShuffledList: with shuffle on, `n` plays the next row
-// of the shuffled list — not the session's own next — and `p` mirrors it.
+// of the shuffled playback order — the list itself stays where it is — and
+// `p` mirrors it.
 func TestShuffleNextWalksShuffledList(t *testing.T) {
 	m := newModel(t, 180, 50)
 	m.perm = reversePerm
@@ -143,28 +168,33 @@ func TestShuffleNextWalksShuffledList(t *testing.T) {
 	if got := m.data.Session().TrackID; got != "t06" {
 		t.Errorf("`p` under shuffle must walk back again (t06), got %q", got)
 	}
-	// Wrapping: from the last shuffled row (t02 at position 41), `n` wraps to
-	// the playing anchor t01 at position 0.
+	// The playback order is not circular: from the last shuffled row (t02 at
+	// position 41) `n` hands over to radio. The mock has no autoplay resolver,
+	// so nothing plays and the toast says the order ran out.
 	if err := m.player.Play(library.Track{ID: "t02"}); err != nil {
 		t.Fatalf("mock setup: play t02: %v", err)
 	}
 	press(t, m, "n")
-	if got := m.data.Session().TrackID; got != "t01" {
-		t.Errorf("`n` at the end of the shuffled list must wrap to its first row (t01), got %q", got)
+	if got := m.data.Session().TrackID; got != "t02" {
+		t.Errorf("`n` at the end of the shuffled list must not wrap, session moved to %q", got)
+	}
+	if !strings.Contains(m.toast.text, "nothing left to play") {
+		t.Errorf("an exhausted order must toast instead of dead-ending, got %q", m.toast.text)
 	}
 }
 
-// TestNextPrevUnchangedWithoutShuffle: with shuffle off, `n`/`p` keep the
-// session's own behaviour exactly (previous behaviour preserved).
-func TestNextPrevUnchangedWithoutShuffle(t *testing.T) {
+// TestNextPrevWalkTheBaseOrder: with shuffle off, `n`/`p` walk the view's
+// base order through the play path — from t01, `n` plays t02 and `p` returns
+// to t01 without ever touching the session's own queue.
+func TestNextPrevWalkTheBaseOrder(t *testing.T) {
 	m := newModel(t, 180, 50)
 	press(t, m, "n")
 	if got := m.data.Session().TrackID; got != "t02" {
-		t.Errorf("`n` without shuffle must use the session next (t02), got %q", got)
+		t.Errorf("`n` without shuffle must play the next row of the base order (t02), got %q", got)
 	}
 	press(t, m, "p")
 	if got := m.data.Session().TrackID; got != "t01" {
-		t.Errorf("`p` without shuffle must use the session prev (t01), got %q", got)
+		t.Errorf("`p` without shuffle must walk back to the previous row (t01), got %q", got)
 	}
 	if m.shuffleOn {
 		t.Error("n/p must not enable shuffle")
@@ -194,9 +224,11 @@ func TestPlayerBarReportsShuffle(t *testing.T) {
 }
 
 // TestShuffleDrawerMirrorsOrder: with the drawer open, up-next follows the
-// shuffled order; toggling off returns the queue rows.
+// shuffled playback order while the list rows stay in base order; toggling
+// off returns the queue rows.
 func TestShuffleDrawerMirrorsOrder(t *testing.T) {
 	m := newModel(t, 180, 50)
+	base := trackIDs(m)
 	m.perm = reversePerm
 	press(t, m, "s")
 	press(t, m, "q")
@@ -204,6 +236,9 @@ func TestShuffleDrawerMirrorsOrder(t *testing.T) {
 	// position 1 = t42 ("Resolution").
 	if got := stripANSI(m.View()); !strings.Contains(got, "▸ Resolution") {
 		t.Errorf("with shuffle on the drawer must mirror the shuffled order (first up-next = Resolution), got:\n%s", got)
+	}
+	if got := trackIDs(m); !equalIDs(got, base) {
+		t.Errorf("while the drawer mirrors the walk, the list must stay in base order, got %v", got)
 	}
 	press(t, m, "s")
 	if got := stripANSI(m.View()); !strings.Contains(got, "▸ Moanin'") {
@@ -277,13 +312,16 @@ func TestShuffleRebuildsOnViewChange(t *testing.T) {
 	if !m.shuffleOn {
 		t.Fatal("after `s` shuffle must be on in the real catalog too")
 	}
-	// The anchor (the cursor's row, nothing plays) keeps position 0; the rest
-	// is reversed by the injected generator.
-	got := trackIDs(m)
+	// The visible list stays in base order; the playback order is the
+	// permutation (the cursor's row keeps position 0, the rest reversed).
+	if got, base := trackIDs(m), []string{a1, a2, a3}; !equalIDs(got, base) {
+		t.Fatalf("the visible rows must stay in base order, got %v", got)
+	}
+	got := trackIDsOf(m.orderedTracks())
 	want := []string{a1, a3, a2}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("pl1 shuffled position %d: got %q, want %q", i, got[i], want[i])
+			t.Fatalf("pl1 playback position %d: got %q, want %q", i, got[i], want[i])
 		}
 	}
 	// Change the view: esc back, down to pl2, open it.
@@ -291,11 +329,14 @@ func TestShuffleRebuildsOnViewChange(t *testing.T) {
 	press(t, m, "j")
 	press(t, m, "j")
 	pressRun(t, m, "enter") // open pl2
-	got = trackIDs(m)
+	if got, base := trackIDs(m), []string{b1, b2, b3, b4}; !equalIDs(got, base) {
+		t.Fatalf("the visible rows must stay in base order after the view change, got %v", got)
+	}
+	got = trackIDsOf(m.orderedTracks())
 	want = []string{b1, b4, b3, b2}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("pl2 shuffled position %d: got %q, want %q — the permutation must rebuild for the new view", i, got[i], want[i])
+			t.Fatalf("pl2 playback position %d: got %q, want %q — the permutation must rebuild for the new view", i, got[i], want[i])
 		}
 	}
 }
@@ -332,15 +373,22 @@ func TestShuffleExcludesNonPlayableRows(t *testing.T) {
 	if got := stripANSI(m.View()); !strings.Contains(got, "2 entries not playable") {
 		t.Errorf("the skipped-entries footnote must still render, got:\n%s", got)
 	}
-	// `n` walks only the playable rows of the shuffled order: nothing plays,
+	// `n` walks only the playable rows of the playback order: nothing plays,
 	// so the walk starts from the cursor (position 0 = a1) and takes the next
-	// row each time, wrapping at the end of the list.
-	want := []string{a3, a2, a1, a1} // order [a1, a3, a2], cursor riding along
+	// row each time. The order is not circular: after the last playable row
+	// `n` hands over to radio — no resolver here, so it toasts and stops.
+	want := []string{a3, a2}
 	for i, id := range want {
 		press(t, m, "n")
 		if len(pl.played) != i+1 || pl.played[i].ID != id {
 			t.Fatalf("`n` walk step %d: played %+v, want %q", i, pl.played, id)
 		}
-		press(t, m, "j") // the cursor rides along the shuffled order
+	}
+	press(t, m, "n")
+	if len(pl.played) != len(want) {
+		t.Errorf("the exhausted order must not wrap: played %+v", pl.played)
+	}
+	if !strings.Contains(m.toast.text, "nothing left to play") {
+		t.Errorf("the exhausted order must toast, got %q", m.toast.text)
 	}
 }

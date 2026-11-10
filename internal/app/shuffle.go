@@ -1,18 +1,16 @@
 package app
 
-// Shuffle (T21): `s` toggles shuffle over the open view's playable rows.
+// Shuffle (T21 + the C revision): `s` toggles shuffle over the open view's
+// playable rows.
 //
-// Semantics (the parent's call): while shuffle is on, OUR order owns
-// playback. The list renders in the shuffled order, the drawer mirrors it,
-// and `n`/`p` play the next/previous playable row of the shuffled list
-// through the existing play path — asking the session to advance its own
-// context would disagree with the visible order. With shuffle off, the
-// session behaviour stands exactly.
-//
-// The permutation keeps the anchor row (the one playing, else the cursor
-// row) at its position so the user does not lose their place, is rebuilt
-// when the view changes, and is cleared when shuffle turns off. The
-// generator is injectable with a seed so tests are deterministic.
+// Semantics (Spotify's model): the visible list never moves — `s` leaves
+// visibleRows() in base order and builds the permutation for playback only.
+// The playback order (orderedTracks) is what `n`/`p` walk and what the drawer
+// mirrors while shuffle is on; the cursor stays exactly where it is when the
+// mode toggles. The permutation keeps the anchor track (the one playing,
+// else the one under the cursor) at its base position in the playback order,
+// is rebuilt when the view changes, and is cleared when shuffle turns off.
+// The generator is injectable with a seed so tests are deterministic.
 
 import (
 	"hash/fnv"
@@ -32,14 +30,12 @@ func seededPerm(n int, seed int64) []int {
 
 // onShuffle is `s`: toggle shuffle for the open view (T21). The mode lives
 // on the model — the player bar reads it from here, never from the session
-// snapshot, because our order is the one that owns playback.
+// snapshot, because our order is the one that owns playback. The visible
+// list does not move and the cursor does not move with it: only what plays
+// next is shuffled (the C revision).
 func (m *Model) onShuffle() tea.Cmd {
 	if len(m.viewTracks()) == 0 {
 		return m.setToast("s · nothing to shuffle here")
-	}
-	cursorID := ""
-	if t, ok := m.trackUnderCursor(); ok {
-		cursorID = t.ID
 	}
 	m.shuffleOn = !m.shuffleOn
 	if m.shuffleOn {
@@ -47,10 +43,6 @@ func (m *Model) onShuffle() tea.Cmd {
 	} else {
 		m.shuffleOrd = nil
 	}
-	if cursorID != "" {
-		m.followTrack(cursorID)
-	}
-	m.syncScroll()
 	if m.shuffleOn {
 		return m.setToast("shuffle on")
 	}
@@ -138,9 +130,11 @@ func (m Model) viewTracks() []library.Track {
 	return nil
 }
 
-// orderedTracks is the view's track list in render order: the shuffled
-// order while shuffle is on, the base order otherwise (and as a fallback if
-// the view changed without a rebuild — it never renders a stale index).
+// orderedTracks is the playback order: the shuffled permutation while
+// shuffle is on, the view's base order otherwise (and as a fallback if the
+// view changed without a rebuild — it never renders a stale index). `n`/`p`
+// walk this order and the drawer mirrors it; the rendered list never uses
+// it (the C revision).
 func (m Model) orderedTracks() []library.Track {
 	tracks := m.viewTracks()
 	if len(m.shuffleOrd) != len(tracks) {
@@ -170,36 +164,33 @@ func (m Model) viewKey() string {
 	return "mock\x00" + m.data.Playlist().Name + "\x00" + m.filter
 }
 
-// followTrack puts the cursor on the visible row of the track with this id:
-// the cursor follows its track through the permutation, not its index.
-func (m *Model) followTrack(id string) {
-	for i, r := range m.visibleRows() {
-		if r.kind == rowTrack && r.track.ID == id {
-			m.cursor = i
-			m.syncScroll()
-			return
-		}
-	}
-}
-
-// shuffleStep walks the shuffled list (dir 1 next, -1 previous) through the
-// existing play path. It reports ok=false when shuffle is off, leaving the
-// session's own next/previous untouched. The walk target is recorded before
-// the play is submitted: while the first press is still in flight, the
-// second one walks from where the first will land — two rapid presses stay
-// two ordered skips, not one repeated track.
-func (m *Model) shuffleStep(dir int) (tea.Cmd, bool) {
-	if !m.shuffleOn {
-		return nil, false
-	}
+// playbackStep is `n`/`p` (the D revision): walk the playback order — the
+// shuffled permutation while shuffle is on, the view's base order otherwise
+// — and play the next (dir 1) or previous (dir -1) row through the existing
+// play path. Playback never waits for the session's queue: at the end of
+// the order the walk hands over to radio (the same resolve path the
+// end-of-track boundary uses), and `p` stops at the start with an honest
+// toast. The walk target is recorded before the play is submitted: while
+// the first press is still in flight, the second one walks from where the
+// first will land — two rapid presses stay two ordered skips, not one
+// repeated track.
+func (m *Model) playbackStep(dir int) tea.Cmd {
 	order := m.orderedTracks()
-	if len(order) == 0 {
-		return m.setToast("nothing to shuffle here"), true
+	n := len(order)
+	if n == 0 {
+		return m.setToast("nothing to play here — open a track list first")
 	}
 	cur := m.shufflePosition(order)
-	next := order[((cur+dir)%len(order)+len(order))%len(order)]
-	m.walks = append(m.walks, next.ID)
-	return m.playRow(next), true
+	next := cur + dir
+	if next >= 0 && next < n {
+		t := order[next]
+		m.walks = append(m.walks, t.ID)
+		return m.playRow(t)
+	}
+	if dir > 0 {
+		return m.radioStep()
+	}
+	return m.setToast("at the start of the playback order")
 }
 
 // walkDone drops the first pending walk with this id: the play landed (or
@@ -213,11 +204,12 @@ func (m *Model) walkDone(id string) {
 	}
 }
 
-// shufflePosition resolves where a walk through the shuffled list starts:
+// shufflePosition resolves where a walk through the playback order starts:
 // a walk already in flight first (the next press must continue where the
 // first one left off — the session has not learned about that play yet),
-// else the playing track, else the track under the cursor, else -1 (the
-// walk starts at the top of the shuffled list).
+// else the playing track, else the last track the app asked to play, else
+// the track under the cursor, else -1 (the walk starts at the top of the
+// order).
 func (m Model) shufflePosition(order []library.Track) int {
 	if n := len(m.walks); n > 0 {
 		if id := m.walks[n-1]; id != "" {
@@ -235,6 +227,13 @@ func (m Model) shufflePosition(order []library.Track) int {
 			}
 		}
 	}
+	if id := m.lastPlayed; id != "" {
+		for i, t := range order {
+			if t.ID == id {
+				return i
+			}
+		}
+	}
 	if t, ok := m.trackUnderCursor(); ok && t.ID != "" {
 		for i, tr := range order {
 			if tr.ID == t.ID {
@@ -246,7 +245,9 @@ func (m Model) shufflePosition(order []library.Track) int {
 }
 
 // shuffleUpNext is what the queue drawer shows while shuffle is on: the rows
-// after the current position of the shuffled list — the same walk `n` takes.
+// after the current position of the playback order — the same walk `n`
+// takes, and like it, never wrapping: an exhausted order shows nothing
+// rather than pretending the top of the list is next.
 func (m Model) shuffleUpNext() []library.Track {
 	order := m.orderedTracks()
 	n := len(order)
@@ -254,16 +255,13 @@ func (m Model) shuffleUpNext() []library.Track {
 		return nil
 	}
 	cur := m.shufflePosition(order)
-	count := drawerRow
-	if cur >= 0 && count > n-1 {
-		count = n - 1 // the player bar owns the current track
+	start := 0
+	if cur >= 0 {
+		start = cur + 1
 	}
-	if count > n {
-		count = n
-	}
-	out := make([]library.Track, 0, count)
-	for i := 1; i <= count; i++ {
-		out = append(out, order[((cur+i)%n+n)%n])
+	out := make([]library.Track, 0, drawerRow)
+	for i := start; i < n && len(out) < drawerRow; i++ {
+		out = append(out, order[i])
 	}
 	return out
 }

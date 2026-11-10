@@ -84,7 +84,8 @@ func (m Model) playlistPlaying(id string) bool { return m.data.Session().TrackID
 
 // visibleRows is the row list under the cursor. In real mode it is the
 // catalog's view (playlists pages, focused contents, search results); in mock
-// mode it is the fixture library.
+// mode it is the fixture library. The list renders in base order — shuffle
+// permutes only the playback order (the C revision), never these rows.
 func (m Model) visibleRows() []row {
 	if m.fetch != nil {
 		return m.realRows()
@@ -105,7 +106,7 @@ func (m Model) visibleRows() []row {
 		}
 		return rows
 	}
-	tracks := m.orderedTracks()
+	tracks := m.viewTracks()
 	rows := make([]row, len(tracks))
 	for i, t := range tracks {
 		rows[i] = row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)}
@@ -202,20 +203,16 @@ func (m *Model) onPause() tea.Cmd {
 }
 
 func (m *Model) onNext() tea.Cmd {
-	// Shuffle on: our order owns playback — walk the shuffled list instead of
-	// asking the session to advance its own context (T21).
-	if cmd, ok := m.shuffleStep(1); ok {
-		return cmd
-	}
-	return m.submitPlayer(playerTask{op: opNext, run: m.player.Next})
+	// The D revision: `n` walks the playback order (shuffled while shuffle is
+	// on, base order otherwise) through the play path, and hands over to radio
+	// when the order runs out — playback never waits for the session's queue.
+	return m.playbackStep(1)
 }
 
 func (m *Model) onPrev() tea.Cmd {
-	// Shuffle on: walk the shuffled list backwards (T21).
-	if cmd, ok := m.shuffleStep(-1); ok {
-		return cmd
-	}
-	return m.submitPlayer(playerTask{op: opPrev, run: m.player.Prev})
+	// `p` walks the playback order backwards and stops at the start with an
+	// honest toast.
+	return m.playbackStep(-1)
 }
 
 // onVolume steps the player volume up (+1) or down (-1).
