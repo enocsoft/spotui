@@ -2,11 +2,13 @@ package player
 
 import (
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 
+	librespot "github.com/elxgy/go-librespot"
 	libplayer "github.com/elxgy/go-librespot/player"
+	"github.com/elxgy/go-librespot/session"
+	"github.com/nahuel/spotify-tui/internal/auth"
 	"github.com/nahuel/spotify-tui/internal/config"
 	"github.com/nahuel/spotify-tui/internal/library"
 )
@@ -119,12 +121,17 @@ func TestLoginCallbackURL(t *testing.T) {
 }
 
 // TestNewBuildsAuthConfig: the player threads its options into the login
-// flow it now owns (spec S20) — client id, callback port and the state dir
-// for the 0600 token cache (spec S9).
+// flow it now owns (spec S20) — librespot's own client id (the only one whose
+// token carries the `username` claim the access point needs), the callback
+// port and the state dir for the 0600 token cache (spec S9). The dashboard
+// id from config is never used for playback.
 func TestNewBuildsAuthConfig(t *testing.T) {
-	p := New(Options{ConfigDir: "/state/dir", CallbackPort: 9001, ClientID: "cid"}, nil)
-	if p.authCfg.ClientID != "cid" || p.authCfg.CallbackPort != 9001 || p.authCfg.StateDir != "/state/dir" {
-		t.Errorf("auth config = %+v, want client cid, port 9001, state /state/dir", p.authCfg)
+	p := New(Options{ConfigDir: "/state/dir", CallbackPort: 9001, ClientID: "dashboard-cid"}, nil)
+	if p.authCfg.ClientID != librespot.ClientIdHex {
+		t.Errorf("auth client id = %q, want librespot's own %q", p.authCfg.ClientID, librespot.ClientIdHex)
+	}
+	if p.authCfg.CallbackPort != 9001 || p.authCfg.StateDir != "/state/dir" {
+		t.Errorf("auth config = %+v, want port 9001, state /state/dir", p.authCfg)
 	}
 	if got := p.authCfg.RedirectURI(); got != "http://127.0.0.1:9001/login" {
 		t.Errorf("auth redirect URI = %q", got)
@@ -135,25 +142,28 @@ func TestNewBuildsAuthConfig(t *testing.T) {
 	}
 }
 
-func TestSessionClientIDs(t *testing.T) {
-	if got := sessionClientIDs("abc123"); len(got) != 2 || got[0] != "abc123" || got[1] != "" {
-		t.Errorf("configured id should be tried first, then librespot default: %v", got)
+// TestSessionOptionsUsesLibrespotTokenCredentials: the bootstrap must carry
+// librespot's own client id and the token as SpotifyTokenCredentials — the
+// same credentials the library's interactive branch derives after its own
+// exchange — and must never delegate the login to InteractiveCredentials,
+// whose callback server consumes the code channel on any request.
+func TestSessionOptionsUsesLibrespotTokenCredentials(t *testing.T) {
+	got := sessionOptions(Options{ConfigDir: "/state/dir"}, auth.Token{AccessToken: "at", UserID: "user-1"})
+	if got.ClientId != librespot.ClientIdHex {
+		t.Errorf("session client id = %q, want librespot's own %q", got.ClientId, librespot.ClientIdHex)
 	}
-	if got := sessionClientIDs(""); len(got) != 1 || got[0] != "" {
-		t.Errorf("empty config must not duplicate the default id: %v", got)
+	if got.ConfigDir != "/state/dir" || got.DeviceType != "computer" {
+		t.Errorf("session options = %+v, want the config dir and device type kept", got)
 	}
-}
-
-func TestIsClientTokenRejection(t *testing.T) {
-	real := errors.New("failed obtaining client token: clienttoken exchange rejected: status=400")
-	if !isClientTokenRejection(real) {
-		t.Errorf("the real bootstrap failure must be recognised as a client-token rejection")
+	if got.CallbackPort != 0 {
+		t.Errorf("session CallbackPort = %d, want unset: the library must not open its own callback", got.CallbackPort)
 	}
-	if isClientTokenRejection(errors.New("connection refused")) {
-		t.Errorf("unrelated failures must not trigger the client id fallback")
+	creds, ok := got.Credentials.(session.SpotifyTokenCredentials)
+	if !ok {
+		t.Fatalf("credentials type = %T, want session.SpotifyTokenCredentials", got.Credentials)
 	}
-	if isClientTokenRejection(nil) {
-		t.Errorf("nil must not be a rejection")
+	if creds.Username != "user-1" || creds.Token != "at" {
+		t.Errorf("credentials = %+v, want username user-1 with the access token", creds)
 	}
 }
 

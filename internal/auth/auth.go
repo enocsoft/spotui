@@ -29,10 +29,12 @@ import (
 	"time"
 )
 
-// Scopes is the authorization scope set requested from the user. The
-// library-facing scopes are included from the start: Spotify only shows the
-// consent screen once, and asking again would force a second approval.
-const Scopes = "user-read-private user-read-playback-state user-modify-playback-state playlist-read-private user-library-read"
+// Scopes is the authorization scope set requested from the user: the exact
+// set go-librespot requests on its own interactive branch, so the token we
+// mint is interchangeable with the one the library would build and the
+// access point accepts it. Asking for anything narrower would change what
+// the token can do; anything wider would break the equivalence.
+const Scopes = "app-remote-control playlist-modify playlist-modify-private playlist-modify-public playlist-read playlist-read-collaborative playlist-read-private streaming ugc-image-upload user-follow-modify user-follow-read user-library-modify user-library-read user-modify user-modify-playback-state user-modify-private user-personalized user-read-birthdate user-read-currently-playing user-read-email user-read-play-history user-read-playback-position user-read-playback-state user-read-private user-read-recently-played user-top-read"
 
 // Production endpoints. Config.Endpoints overrides them in tests.
 const (
@@ -82,6 +84,10 @@ type Config struct {
 	Endpoints Endpoints
 	// HTTP is the client used for every call; nil = a client with a timeout.
 	HTTP *http.Client
+	// Log optionally receives human-paced progress lines (the player hands
+	// in its capture logger). auth never logs tokens, codes or verifiers,
+	// and usernames arrive obfuscated. Nil = silent.
+	Log func(format string, args ...any)
 }
 
 func (c Config) endpoints() Endpoints {
@@ -179,7 +185,9 @@ func (c Config) AuthorizeURL(p PKCE) string {
 }
 
 // Token is a Spotify access token with its refresh material and the user id
-// the session needs as Username.
+// the session needs as Username. The id comes from the token response's
+// extra `username` field (present when the client id is librespot's own)
+// and falls back to GET /v1/me when it is absent.
 type Token struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
@@ -285,11 +293,13 @@ func awaitCode(ctx context.Context, ln net.Listener, state string) (string, erro
 }
 
 // tokenResponse is the shape of Spotify's token endpoint body, success or
-// error (RFC 6749 §5.1/§5.2).
+// error (RFC 6749 §5.1/§5.2). Username is the extra field Spotify appends
+// for librespot's client id; it is absent for dashboard client ids.
 type tokenResponse struct {
 	AccessToken      string `json:"access_token"`
 	RefreshToken     string `json:"refresh_token"`
 	ExpiresIn        int    `json:"expires_in"`
+	Username         string `json:"username"`
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
 }
@@ -333,11 +343,52 @@ func (c Config) tokenRequest(ctx context.Context, form url.Values) (Token, error
 	if parsed.ExpiresIn <= 0 {
 		return Token{}, fmt.Errorf("token exchange: Spotify returned no expiry (expires_in %d)", parsed.ExpiresIn)
 	}
+	if parsed.Username != "" {
+		c.logf("login: username taken from the token response (user: %s)", obfuscateUsername(parsed.Username))
+	}
 	return Token{
 		AccessToken:  parsed.AccessToken,
 		RefreshToken: parsed.RefreshToken,
 		Expiry:       time.Now().Add(time.Duration(parsed.ExpiresIn) * time.Second),
+		UserID:       parsed.Username,
 	}, nil
+}
+
+// logf writes a progress line to the optional Log hook. Tokens, codes and
+// verifiers never reach the log, and usernames arrive obfuscated.
+func (c Config) logf(format string, args ...any) {
+	if c.Log != nil {
+		c.Log(format, args...)
+	}
+}
+
+// obfuscateUsername mirrors the dependency's ObfuscateUsername: keep the
+// first two and last two characters of the local part, mask the rest.
+func obfuscateUsername(username string) string {
+	if i := strings.Index(username, "@"); i >= 0 {
+		return obfuscateUsername(username[:i]) + "@" + username[i+1:]
+	}
+	if len(username) < 5 {
+		return username
+	}
+	return username[:2] + strings.Repeat("*", len(username)-4) + username[len(username)-2:]
+}
+
+// ensureUserID fills the user id the session needs as Username: the token
+// response's `username` claim when present (logged by tokenRequest), the
+// GET /v1/me fallback only when absent. The source is logged with the
+// username obfuscated.
+func (c Config) ensureUserID(ctx context.Context, tok *Token) error {
+	if tok.UserID != "" {
+		return nil
+	}
+	id, err := c.FetchUserID(ctx, tok.AccessToken)
+	if err != nil {
+		return err
+	}
+	tok.UserID = id
+	c.logf("login: username taken from GET /v1/me (user: %s)", obfuscateUsername(id))
+	return nil
 }
 
 // Exchange trades the authorization code for tokens (grant_type=
@@ -366,7 +417,9 @@ func (c Config) Refresh(ctx context.Context, tok Token) (Token, error) {
 	if nt.RefreshToken == "" {
 		nt.RefreshToken = tok.RefreshToken
 	}
-	nt.UserID = tok.UserID
+	if nt.UserID == "" {
+		nt.UserID = tok.UserID
+	}
 	return nt, nil
 }
 
@@ -448,10 +501,23 @@ func (c Config) EnsureToken(ctx context.Context, onAuthorizeURL func(string)) (T
 		return Token{}, err
 	}
 	if ok && !tok.Expired() {
+		// An old cache can lack the user id (it predates the username
+		// claim): fill it once through the profile endpoint and persist it.
+		if tok.UserID == "" {
+			if err := c.ensureUserID(ctx, &tok); err != nil {
+				return Token{}, err
+			}
+			if err := c.SaveToken(tok); err != nil {
+				return Token{}, err
+			}
+		}
 		return tok, nil
 	}
 	if ok && tok.RefreshToken != "" {
 		if nt, err := c.Refresh(ctx, tok); err == nil {
+			if err := c.ensureUserID(ctx, &nt); err != nil {
+				return Token{}, err
+			}
 			if err := c.SaveToken(nt); err != nil {
 				return Token{}, err
 			}
@@ -474,6 +540,9 @@ func (c Config) EnsureToken(ctx context.Context, onAuthorizeURL func(string)) (T
 	}
 	tok, err = c.Exchange(ctx, code, pkce.Verifier)
 	if err != nil {
+		return Token{}, err
+	}
+	if err := c.ensureUserID(ctx, &tok); err != nil {
 		return Token{}, err
 	}
 	if err := c.SaveToken(tok); err != nil {

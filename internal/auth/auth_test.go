@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -68,8 +69,14 @@ func TestChallengeS256KnownVector(t *testing.T) {
 	}
 }
 
+// librespotScopes is the exact scope set go-librespot requests on its own
+// interactive branch; the token we mint must be interchangeable with the one
+// the library would build, so the scope set matches it verbatim.
+const librespotScopes = "app-remote-control playlist-modify playlist-modify-private playlist-modify-public playlist-read playlist-read-collaborative playlist-read-private streaming ugc-image-upload user-follow-modify user-follow-read user-library-modify user-library-read user-modify user-modify-playback-state user-modify-private user-personalized user-read-birthdate user-read-currently-playing user-read-email user-read-play-history user-read-playback-position user-read-playback-state user-read-private user-read-recently-played user-top-read"
+
 // TestAuthorizeURL: response_type must be code (the implicit grant is dead),
-// the redirect must be the loopback /login URI and the scopes the exact set.
+// the redirect must be the loopback /login URI and the scopes the exact set
+// the library requests, so the token works for playback.
 func TestAuthorizeURL(t *testing.T) {
 	cfg := Config{ClientID: "cid", CallbackPort: 8888}
 	u, err := url.Parse(cfg.AuthorizeURL(PKCE{Challenge: "challenge-xyz", State: "state-xyz"}))
@@ -94,8 +101,8 @@ func TestAuthorizeURL(t *testing.T) {
 			t.Errorf("authorize URL %s = %q, want %q", k, got, v)
 		}
 	}
-	if got := Scopes; got != "user-read-private user-read-playback-state user-modify-playback-state playlist-read-private user-library-read" {
-		t.Errorf("Scopes = %q", got)
+	if got := Scopes; got != librespotScopes {
+		t.Errorf("Scopes = %q, want the library's exact set %q", got, librespotScopes)
 	}
 }
 
@@ -194,6 +201,46 @@ func TestCallbackCodeOnce(t *testing.T) {
 	resp2.Body.Close()
 	if resp2.StatusCode == http.StatusOK {
 		t.Errorf("second request answered %d, want a refusal", resp2.StatusCode)
+	}
+}
+
+// TestCallbackWithoutCodeDoesNotEndFlow: the exact bug that killed the
+// library's own callback — any request without a code (a favicon fetch, a
+// tab restore, a reload) must be answered and ignored, never consume the
+// one-shot login, so the real redirect can still complete it.
+func TestCallbackWithoutCodeDoesNotEndFlow(t *testing.T) {
+	results := make(chan callbackResult, 1)
+	srv := httptest.NewServer(callbackHandler("st", results))
+	defer srv.Close()
+
+	for _, path := range []string{"/login?state=st", "/favicon.ico", "/"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			t.Errorf("GET %s answered %d, want a plain refusal", path, resp.StatusCode)
+		}
+		select {
+		case res := <-results:
+			t.Fatalf("GET %s ended the login with %+v", path, res)
+		default:
+		}
+	}
+
+	resp, err := http.Get(srv.URL + "/login?code=real&state=st")
+	if err != nil {
+		t.Fatalf("GET with the real code: %v", err)
+	}
+	resp.Body.Close()
+	select {
+	case res := <-results:
+		if res.code != "real" || res.err != nil {
+			t.Errorf("result after noise = %+v, want code real", res)
+		}
+	default:
+		t.Fatal("the real redirect never delivered its code")
 	}
 }
 
@@ -334,6 +381,26 @@ func TestExchangeSurfacesErrorBody(t *testing.T) {
 	}
 }
 
+// TestExchangeReadsUsernameClaim: with librespot's client id the token
+// response carries the Spotify username as the extra JSON field `username`;
+// that value — not a profile call — fills the user id the session needs.
+func TestExchangeReadsUsernameClaim(t *testing.T) {
+	cfg := Config{ClientID: "cid", CallbackPort: 8888, StateDir: t.TempDir()}
+	srv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"at","refresh_token":"rt","expires_in":3600,"username":"spotify-user"}`)
+	})
+	cfg.Endpoints.Token = srv.URL
+
+	tok, err := cfg.Exchange(context.Background(), "the-code", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if tok.UserID != "spotify-user" {
+		t.Errorf("UserID = %q, want the username claim spotify-user", tok.UserID)
+	}
+}
+
 // TestRefreshParsesAndKeepsOldRefreshToken: the refresh grant is posted and,
 // when Spotify does not rotate the refresh token, the old one is kept.
 func TestRefreshParsesAndKeepsOldRefreshToken(t *testing.T) {
@@ -457,16 +524,21 @@ func TestEnsureTokenNoTokenRunsFullFlow(t *testing.T) {
 		if v := r.PostFormValue("code_verifier"); len(v) < 43 || len(v) > 128 {
 			t.Errorf("code_verifier length = %d, want 43..128", len(v))
 		}
-		fmt.Fprint(w, `{"access_token":"at","refresh_token":"rt","expires_in":3600}`)
+		// The token response carries the `username` extra field (present
+		// for librespot's client id), so no profile call is needed.
+		fmt.Fprint(w, `{"access_token":"at","refresh_token":"rt","expires_in":3600,"username":"user-1"}`)
+	})
+	meSrv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("GET /v1/me hit although the token response carried the username")
+		fmt.Fprint(w, `{}`)
 	})
 	port := freePort(t)
 	cfg := Config{
 		ClientID:     "cid",
 		CallbackPort: port,
 		StateDir:     t.TempDir(),
-		Endpoints:    Endpoints{Authorize: "https://accounts.spotify.test/authorize", Token: srv.URL},
+		Endpoints:    Endpoints{Authorize: "https://accounts.spotify.test/authorize", Token: srv.URL, Me: meSrv.URL},
 	}
-
 	urlCh := make(chan string, 1)
 	type out struct {
 		tok Token
@@ -511,8 +583,8 @@ func TestEnsureTokenNoTokenRunsFullFlow(t *testing.T) {
 		if got.err != nil {
 			t.Fatalf("EnsureToken: %v", got.err)
 		}
-		if got.tok.AccessToken != "at" {
-			t.Errorf("token = %+v, want access at", got.tok)
+		if got.tok.AccessToken != "at" || got.tok.UserID != "user-1" {
+			t.Errorf("token = %+v, want access at for user-1", got.tok)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("EnsureToken did not complete after the callback")
@@ -520,6 +592,109 @@ func TestEnsureTokenNoTokenRunsFullFlow(t *testing.T) {
 	if cached, ok, _ := cfg.LoadToken(); !ok || cached.AccessToken != "at" {
 		t.Errorf("cache after login = %+v ok=%v, want the new token", cached, ok)
 	}
+}
+
+// TestEnsureTokenUsernameFallsBackToProfile: when the token response carries
+// no `username` claim the user id comes from GET /v1/me (its id), is cached,
+// and the source is logged — with the username obfuscated, never raw.
+func TestEnsureTokenUsernameFallsBackToProfile(t *testing.T) {
+	srv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.PostFormValue("grant_type"); got != "authorization_code" {
+			t.Errorf("grant_type = %q", got)
+		}
+		fmt.Fprint(w, `{"access_token":"at","refresh_token":"rt","expires_in":3600}`)
+	})
+	meSrv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer at" {
+			t.Errorf("Authorization = %q, want Bearer at", got)
+		}
+		fmt.Fprint(w, `{"id":"me-user"}`)
+	})
+	port := freePort(t)
+	cfg := Config{
+		ClientID:     "cid",
+		CallbackPort: port,
+		StateDir:     t.TempDir(),
+		Endpoints:    Endpoints{Authorize: "https://accounts.spotify.test/authorize", Token: srv.URL, Me: meSrv.URL},
+	}
+	var lines collectLog
+	cfg.Log = lines.add
+
+	urlCh := make(chan string, 1)
+	type out struct {
+		tok Token
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		tok, err := cfg.EnsureToken(context.Background(), func(u string) { urlCh <- u })
+		done <- out{tok, err}
+	}()
+
+	var loginURL string
+	select {
+	case loginURL = <-urlCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no login URL was emitted")
+	}
+	u, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatalf("emitted URL: %v", err)
+	}
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/login?code=the-code&state=%s",
+		port, url.QueryEscape(u.Query().Get("state"))))
+	if err != nil {
+		t.Fatalf("completing the login: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("EnsureToken: %v", got.err)
+		}
+		if got.tok.UserID != "me-user" {
+			t.Errorf("UserID = %q, want me-user from the /v1/me fallback", got.tok.UserID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureToken did not complete after the callback")
+	}
+	if cached, ok, _ := cfg.LoadToken(); !ok || cached.UserID != "me-user" {
+		t.Errorf("cache = %+v ok=%v, want the fallback user id persisted", cached, ok)
+	}
+	line := lines.line(t, "/v1/me")
+	if strings.Contains(line, "me-user") {
+		t.Errorf("log line leaked the raw username: %s", line)
+	}
+	if !strings.Contains(line, "me***er") {
+		t.Errorf("log line = %q, want the obfuscated username me***er", line)
+	}
+}
+
+// collectLog gathers optional progress lines from the flow under test.
+type collectLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (c *collectLog) add(format string, args ...any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, fmt.Sprintf(format, args...))
+}
+
+// line returns the first line mentioning substr, failing the test if none.
+func (c *collectLog) line(t *testing.T, substr string) string {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, l := range c.lines {
+		if strings.Contains(l, substr) {
+			return l
+		}
+	}
+	t.Fatalf("no log line mentions %q; got %v", substr, c.lines)
+	return ""
 }
 
 // TestEnsureTokenRefreshRejectedFallsBackToLogin: a revoked refresh token
@@ -537,12 +712,17 @@ func TestEnsureTokenRefreshRejectedFallsBackToLogin(t *testing.T) {
 	})
 	port := freePort(t)
 	dir := t.TempDir()
+	meSrv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":"profile-user"}`)
+	})
 	cfg := Config{
 		ClientID:     "cid",
 		CallbackPort: port,
 		StateDir:     dir,
-		Endpoints:    Endpoints{Authorize: "https://accounts.spotify.test/authorize", Token: srv.URL},
+		Endpoints:    Endpoints{Authorize: "https://accounts.spotify.test/authorize", Token: srv.URL, Me: meSrv.URL},
 	}
+	var lines collectLog
+	cfg.Log = lines.add
 	if err := cfg.SaveToken(Token{AccessToken: "old", RefreshToken: "dead", Expiry: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
@@ -580,6 +760,69 @@ func TestEnsureTokenRefreshRejectedFallsBackToLogin(t *testing.T) {
 	}
 	if cached, ok, _ := cfg.LoadToken(); !ok || cached.AccessToken != "fresh" {
 		t.Errorf("cache = %+v ok=%v, want the fresh token", cached, ok)
+	}
+	// The token response carried no username claim: the fallback filled the
+	// user id through the profile endpoint, which this test serves.
+	if cached, _, _ := cfg.LoadToken(); cached.UserID == "" {
+		t.Error("user id empty after login; the /v1/me fallback must fill it")
+	}
+}
+
+// TestEnsureTokenLogsUsernameSource: when the claim is present the log
+// names the token response as the source and shows the username obfuscated,
+// never raw, and no /v1/me call happens.
+func TestEnsureTokenLogsUsernameSource(t *testing.T) {
+	srv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"access_token":"at","refresh_token":"rt","expires_in":3600,"username":"spotify-user"}`)
+	})
+	meSrv := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("GET /v1/me hit although the token response carried the username")
+		fmt.Fprint(w, `{}`)
+	})
+	port := freePort(t)
+	cfg := Config{
+		ClientID:     "cid",
+		CallbackPort: port,
+		StateDir:     t.TempDir(),
+		Endpoints:    Endpoints{Authorize: "https://accounts.spotify.test/authorize", Token: srv.URL, Me: meSrv.URL},
+	}
+	var lines collectLog
+	cfg.Log = lines.add
+
+	urlCh := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := cfg.EnsureToken(context.Background(), func(u string) { urlCh <- u })
+		done <- err
+	}()
+	var loginURL string
+	select {
+	case loginURL = <-urlCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no login URL was emitted")
+	}
+	u, _ := url.Parse(loginURL)
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/login?code=the-code&state=%s",
+		port, url.QueryEscape(u.Query().Get("state"))))
+	if err != nil {
+		t.Fatalf("completing the login: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("EnsureToken: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureToken did not complete")
+	}
+	line := lines.line(t, "token response")
+	if strings.Contains(line, "spotify-user") {
+		t.Errorf("log line leaked the raw username: %s", line)
+	}
+	if !strings.Contains(line, "sp********er") {
+		t.Errorf("log line = %q, want the obfuscated username sp********er", line)
 	}
 }
 
