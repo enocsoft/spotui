@@ -9,6 +9,8 @@ package app
 // changes. Resolver failures toast and stop: no retry loop.
 
 import (
+	"os"
+
 	"context"
 	"errors"
 	"strings"
@@ -125,11 +127,24 @@ func radioAtEnd(d *radioData) {
 // reports whether this tick fired the end-of-track boundary.
 func runRadioTick(t *testing.T, m *Model) (radioResolvedMsg, bool) {
 	t.Helper()
-	updated, cmd := m.Update(tickMsg{})
-	*m = updated.(Model)
-	if cmd == nil {
-		return radioResolvedMsg{}, false
+	// The boundary needs the position to be frozen at the end band, so it takes
+	// two consecutive ticks: the first records the position, the second sees it
+	// unchanged. Tick twice and report the first fire.
+	for attempt := 0; attempt < 2; attempt++ {
+		updated, cmd := m.Update(tickMsg{})
+		*m = updated.(Model)
+		if cmd == nil {
+			continue
+		}
+		if msg, ok := runRadioCmd(t, cmd); ok {
+			return msg, true
+		}
 	}
+	return radioResolvedMsg{}, false
+}
+
+func runRadioCmd(t *testing.T, cmd tea.Cmd) (radioResolvedMsg, bool) {
+	t.Helper()
 	type res struct {
 		msg radioResolvedMsg
 		ok  bool
@@ -522,5 +537,37 @@ func TestRadioPlayFailureStopsRadio(t *testing.T) {
 	}
 	if !strings.Contains(m.toast.text, "radio") {
 		t.Errorf("the failure must be named, toast = %q", m.toast.text)
+	}
+}
+
+// TestMain shrinks the live-state poll: the radio boundary needs consecutive
+// ticks and a real second per tick dominated the suite's runtime.
+func TestMain(m *testing.M) {
+	tickInterval = time.Millisecond
+	os.Exit(m.Run())
+}
+
+// TestRadioFiresWhenThePositionStopsShortOfTheEnd: Spotify's metadata duration and
+// the decoded audio differ by a second or two. A real track ended at 3m34.292s of a
+// 3m36.396s total and the position froze there, so requiring elapsed >= total never
+// fired and radio looked dead. The end band plus a frozen position is the boundary.
+func TestRadioFiresWhenThePositionStopsShortOfTheEnd(t *testing.T) {
+	data := newRadioData()
+	rp := &radioPlayer{data: data, next: []library.Track{
+		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
+	}}
+	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "R")
+
+	radioAtEnd(data)
+	data.session.Elapsed = data.session.Total - 2*time.Second // the real-world gap
+	msg, fired := runRadioTick(t, m)
+	if !fired {
+		t.Fatal("a frozen position inside the end band must fire the boundary")
+	}
+	updated, _ := m.Update(msg)
+	*m = updated.(Model)
+	if len(rp.played) != 1 {
+		t.Fatalf("the resolved track must play, played %d", len(rp.played))
 	}
 }

@@ -31,6 +31,12 @@ const radioResolveTimeout = 30 * time.Second
 // radioRecentCap bounds the recently played uris the model keeps.
 const radioRecentCap = 20
 
+// radioEndTolerance is how close to the reported duration counts as the end.
+// Spotify's metadata duration and the decoded audio differ by a second or two:
+// a real track ended at 3m34.292s of a 3m36.396s total and the position then
+// froze, so requiring elapsed >= total never fired.
+const radioEndTolerance = 5 * time.Second
+
 // onRadio is `R`: toggle radio. Turning it off restores the normal
 // end-of-list behaviour — the session stops when nothing is queued. No
 // persistence between restarts, exactly like shuffle.
@@ -64,7 +70,13 @@ func (m *Model) radioCheck() tea.Cmd {
 	if s.TrackID == "" || (s.State != library.StatePlaying && s.State != library.StatePaused) {
 		return nil
 	}
-	if s.Total <= 0 || s.Elapsed < s.Total {
+	// The boundary is "the position reached the end band and stopped moving",
+	// which covers the metadata/audio duration mismatch. A user pause lands
+	// mid-track, far from the band, so it never qualifies.
+	frozen := m.radioLastTrack == s.TrackID && m.radioLastElapsed == s.Elapsed
+	atEnd := s.Total > 0 && s.Elapsed > 0 && s.Elapsed >= s.Total-radioEndTolerance
+	m.radioLastTrack, m.radioLastElapsed = s.TrackID, s.Elapsed
+	if !atEnd || !frozen {
 		return nil
 	}
 	if m.radioFiredID != "" && m.radioFiredID != s.TrackID {

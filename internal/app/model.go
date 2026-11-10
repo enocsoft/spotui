@@ -198,6 +198,10 @@ type Model struct {
 	radioFiredID string
 	radioRecent  []string
 	autoplay     library.AutoplayResolver
+	// radioLastTrack/radioLastElapsed remember the previous tick so the boundary
+	// can require a frozen position (the track ended) instead of a moving one.
+	radioLastTrack   string
+	radioLastElapsed time.Duration
 }
 
 // New builds the model. data and player are interfaces backed by mock data
@@ -264,8 +268,13 @@ func (m Model) rearmEvents() tea.Cmd {
 	return waitForEvents(m.eventCh)
 }
 
+// tickInterval is the live-state poll. It is a variable so the suite can shrink it:
+// the radio boundary needs consecutive ticks and one second per tick made the radio
+// tests take most of the run.
+var tickInterval = time.Second
+
 func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
 // searchDebounceCmd arms the ~250 ms typing debounce (T19): the tick fires
