@@ -42,8 +42,8 @@ S19. Search, el palette de comandos, el selector de salida y la ayuda son **vent
 | T9 | Integrar `go-librespot` embebido: sesión, auth único, login y arranque del player desde `cmd/spotify-tui`; medir CGO y backends disponibles en esta máquina | S1, S15, S17 | pendiente | — |
 | T10 | Reemplazar el picker de dispositivos por selector de salida de audio local y los estados del player por estados del reproductor propio | S16 | pendiente (abre T4/T5) | — |
 | T8 | Estados de restricción en la UI: playlist sin items (no sos owner), búsqueda paginada de a 10, campos ausentes (`popularity`, `followers`) leídos como opcionales | S14 | pendiente | — |
-| T12 | Ventanas flotantes reales: search, palette, output picker y ayuda con borde cerrado y centrado, en vez de renderizar en el lugar de la lista | S19 | pendiente (espera T11) | — |
-| T13 | `:play <spotify:track:ID>` en el palette para poder escuchar hoy, antes del catálogo real | S1, S16 | pendiente | — |
+| T12 | Ventanas flotantes reales: search, palette, output picker y ayuda con borde cerrado y centrado, en vez de renderizar en el lugar de la lista | S19 | entregado | — |
+| T13 | `:play <spotify:track:ID>` en el palette para poder escuchar hoy, antes del catálogo real | S1, S16 | entregado | — |
 | T14 | README: declarar que es un cliente no oficial (S17) y que **CGO_ENABLED=0 no compila** | S17 | pendiente | — |
 
 ## Log
@@ -87,3 +87,7 @@ L14 (T11 entregado, verificado por el padre): reproductor local real embebido �
 L15 (sorpresas de la API de go-librespot, para no volver a tropezar): (a) el callback es `/login`, **no** `/callback` como decía S12 — corregido; el path lo fija la librería. (b) `player.Options.CountryCode` debe ser no-nil o panickea al resolver metadata: se setea con `GET /v1/me` después del login. (c) `output` no expone enumeración de sinks: se usa `jfreymuth/pulse` directo (v0.1.3, dependencia ya presente en el árbol). (d) la URL de login interactivo sólo sale por el logger, no hay callback en la API. (e) el estado Connect/dealer no hace falta para playback local. (f) `CGO_ENABLED=0` no compila nada que importe `go-librespot/player` porque `flac` no tiene fallback puro Go: hay que documentarlo (T14).
 
 L16 (estado honesto del sonido): el motor ya reproduce un track real por URI, pero el catálogo sigue siendo mock, así que **desde la UI todavía no hay nada que suene**: `enter` en una fila mock avisa que no es un track id de Spotify. Para poder escuchar antes de encarar T7, agregué T13 (`:play <uri>` en el palette).
+
+L17 (T12+T13 entregados, verificados por el padre): un solo componente de ventana flotante (`internal/app/window.go`) sirve `/`, `:`, `d` y `?`: borde cerrado, centrada, dimensionada al contenido con tope `min(104, w-4) × min(14, h-6)`, una a la vez, `esc` restaura el frame exacto (cursor y offset de la lista intactos). `:play` acepta `spotify:track:<id>` o base62 de 22 caracteres; entrada inválida da toast con lo esperado. `library.ParseTrackID` es ahora la lógica compartida con `player.ParseSpotifyTrackID`. Verificación propia: `gofmt` limpio, `go vet` rc=0, `go test -count=1 ./...` rc=0, `CGO_ENABLED=1 go build ./...` rc=0, y render real capturado en tmux con `SPOTIFY_TUI_MOCK=1`: paleta abierta a 180x50 y a 80x24 → 50/24 líneas exactas, 180/80 columnas, caja cerrada, lista de atrás sin moverse.
+
+L18 (ajuste de diseño derivado del código): DESIGN.md decía que el palette mide 104 columnas fijas, y la implementación lo dimensiona al contenido. Manda la regla "sizes to its content, never to the screen", así que corregí el doc: hasta 104 de tope, angosto cuando el contenido es una línea. Un panel fijo de 104 celdas con un hint de una línea es espacio muerto.
