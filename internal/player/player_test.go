@@ -1,9 +1,11 @@
 package player
 
 import (
+	"errors"
 	"testing"
 
 	libplayer "github.com/elxgy/go-librespot/player"
+	"github.com/nahuel/spotify-tui/internal/config"
 	"github.com/nahuel/spotify-tui/internal/library"
 )
 
@@ -111,5 +113,44 @@ func TestSinkLabelPrefersDescription(t *testing.T) {
 func TestLoginCallbackURL(t *testing.T) {
 	if got := LoginCallbackURL(8888); got != "http://127.0.0.1:8888/login" {
 		t.Errorf("LoginCallbackURL(8888) = %q", got)
+	}
+}
+
+// TestNewBuildsAuthConfig: the player threads its options into the login
+// flow it now owns (spec S20) — client id, callback port and the state dir
+// for the 0600 token cache (spec S9).
+func TestNewBuildsAuthConfig(t *testing.T) {
+	p := New(Options{ConfigDir: "/state/dir", CallbackPort: 9001, ClientID: "cid"}, nil)
+	if p.authCfg.ClientID != "cid" || p.authCfg.CallbackPort != 9001 || p.authCfg.StateDir != "/state/dir" {
+		t.Errorf("auth config = %+v, want client cid, port 9001, state /state/dir", p.authCfg)
+	}
+	if got := p.authCfg.RedirectURI(); got != "http://127.0.0.1:9001/login" {
+		t.Errorf("auth redirect URI = %q", got)
+	}
+	p = New(Options{ConfigDir: "/state/dir"}, nil)
+	if p.authCfg.CallbackPort != config.DefaultCallbackPort {
+		t.Errorf("default callback port = %d, want %d", p.authCfg.CallbackPort, config.DefaultCallbackPort)
+	}
+}
+
+func TestSessionClientIDs(t *testing.T) {
+	if got := sessionClientIDs("abc123"); len(got) != 2 || got[0] != "abc123" || got[1] != "" {
+		t.Errorf("configured id should be tried first, then librespot default: %v", got)
+	}
+	if got := sessionClientIDs(""); len(got) != 1 || got[0] != "" {
+		t.Errorf("empty config must not duplicate the default id: %v", got)
+	}
+}
+
+func TestIsClientTokenRejection(t *testing.T) {
+	real := errors.New("failed obtaining client token: clienttoken exchange rejected: status=400")
+	if !isClientTokenRejection(real) {
+		t.Errorf("the real bootstrap failure must be recognised as a client-token rejection")
+	}
+	if isClientTokenRejection(errors.New("connection refused")) {
+		t.Errorf("unrelated failures must not trigger the client id fallback")
+	}
+	if isClientTokenRejection(nil) {
+		t.Errorf("nil must not be a rejection")
 	}
 }

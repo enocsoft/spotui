@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/elxgy/go-librespot/session"
 	"github.com/elxgy/go-librespot/sessionconfig"
 
+	"github.com/nahuel/spotify-tui/internal/auth"
 	"github.com/nahuel/spotify-tui/internal/config"
 	"github.com/nahuel/spotify-tui/internal/library"
 )
@@ -44,7 +46,9 @@ type Options struct {
 	ConfigDir string
 	// CallbackPort is the interactive-login callback port (spec S12).
 	CallbackPort int
-	// ClientID is the Spotify app client id; empty uses the librespot default.
+	// ClientID is the Spotify app client id: it configures the OAuth PKCE
+	// login the app owns (spec S20) and rides along on the session's token
+	// credentials.
 	ClientID string
 	// Output is the preferred sink id; empty means the PulseAudio default.
 	Output string
@@ -55,6 +59,7 @@ type Options struct {
 type Player struct {
 	content library.DataSource
 	opts    Options
+	authCfg auth.Config
 	baseCtx context.Context
 	http    *http.Client
 
@@ -90,8 +95,15 @@ func New(opts Options, content library.DataSource) *Player {
 		opts.CallbackPort = config.DefaultCallbackPort
 	}
 	return &Player{
-		content:   content,
-		opts:      opts,
+		content: content,
+		opts:    opts,
+		authCfg: auth.Config{
+			ClientID:     opts.ClientID,
+			CallbackPort: opts.CallbackPort,
+			// ConfigDir is the XDG state dir: the token cache (spec S9)
+			// lives next to the device id, never in the repository.
+			StateDir: opts.ConfigDir,
+		},
 		http:      &http.Client{Timeout: 30 * time.Second},
 		libEvents: make(chan library.Event, 16),
 		volCh:     make(chan float32, 1),
@@ -141,32 +153,64 @@ func (p *Player) emit(ev library.Event) {
 	p.libEvents <- ev
 }
 
-// run owns the bootstrap and then pumps player events until the context dies.
+// run owns the login (spec S20), the session bootstrap and then pumps
+// player events until the context dies.
 func (p *Player) run() {
-	log := newCaptureLogger(func(url string) {
-		p.mu.Lock()
-		p.loginURL = url
-		p.mu.Unlock()
-		p.emit(library.Event{Type: library.EventLogin, LoginURL: url})
-	})
+	log := newCaptureLogger(nil)
 
-	sess, _, err := sessionconfig.NewSessionFromConfigDir(p.baseCtx, log, sessionconfig.Options{
-		ConfigDir:    p.opts.ConfigDir,
-		CallbackPort: p.opts.CallbackPort,
-		DeviceType:   "computer",
-		// Empty on purpose: the embedded session authenticates with librespot's own
-		// client id. A dashboard client id is registered for the Web API authorization
-		// flow, not for librespot's client-token exchange, and passing it here makes that
-		// exchange fail with a bare 400. The configured client id is used by the Web API
-		// slice (T7) instead.
-		ClientId:    "",
-		Credentials: nil, // stored credentials, else interactive login
-	})
+	// The app owns the login: OAuth Authorization Code + PKCE against
+	// accounts.spotify.com with a local /login callback (spec S20). The
+	// library's interactive flow is dead — Spotify removed the implicit
+	// grant (response_type=token) on 2025-11-27 (L21) — so the token is
+	// produced here and handed over as SpotifyTokenCredentials.
+	tok, err := p.authCfg.EnsureToken(p.baseCtx, p.onAuthorizeURL)
 	if err != nil {
-		p.mu.Lock()
-		p.bootErr = err
-		p.mu.Unlock()
-		p.emit(library.Event{Type: library.EventFailed, Err: err})
+		p.fail(err)
+		return
+	}
+	// Freshly minted tokens carry no user id yet; a cached one does.
+	if tok.UserID == "" {
+		userID, err := p.authCfg.FetchUserID(p.baseCtx, tok.AccessToken)
+		if err != nil {
+			p.fail(err)
+			return
+		}
+		tok.UserID = userID
+		if err := p.authCfg.SaveToken(tok); err != nil {
+			p.fail(err)
+			return
+		}
+	}
+
+	p.mu.Lock()
+	p.loginURL = ""
+	p.mu.Unlock()
+
+	// The dashboard client id is the right partner for a token our PKCE flow
+	// minted, but librespot still runs its own client-token exchange during
+	// bootstrap, and that exchange has rejected a dashboard client id with a
+	// bare 400 (L20). Do not guess which id the server wants today: try the
+	// configured one, fall back to librespot's default, report what failed.
+	candidates := sessionClientIDs(p.opts.ClientID)
+	var sess *session.Session
+	var bootErr error
+	for i, clientID := range candidates {
+		sess, _, bootErr = sessionconfig.NewSessionFromConfigDir(p.baseCtx, log, sessionconfig.Options{
+			ConfigDir:    p.opts.ConfigDir,
+			CallbackPort: p.opts.CallbackPort,
+			DeviceType:   "computer",
+			ClientId:     clientID,
+			Credentials:  &session.SpotifyTokenCredentials{Username: tok.UserID, Token: tok.AccessToken},
+		})
+		if bootErr == nil {
+			break
+		}
+		if !isClientTokenRejection(bootErr) || i == len(candidates)-1 {
+			break
+		}
+	}
+	if bootErr != nil {
+		p.fail(bootErr)
 		return
 	}
 
@@ -211,6 +255,23 @@ func (p *Player) run() {
 			p.rebuildPlayer(id)
 		}
 	}
+}
+
+// onAuthorizeURL surfaces the login URL the auth flow generated: the TUI
+// shows it as a full-screen state (spec S9).
+func (p *Player) onAuthorizeURL(url string) {
+	p.mu.Lock()
+	p.loginURL = url
+	p.mu.Unlock()
+	p.emit(library.Event{Type: library.EventLogin, LoginURL: url})
+}
+
+// fail records a bootstrap failure and surfaces it to the UI.
+func (p *Player) fail(err error) {
+	p.mu.Lock()
+	p.bootErr = err
+	p.mu.Unlock()
+	p.emit(library.Event{Type: library.EventFailed, Err: err})
 }
 
 // currentEventCh returns the event channel of the live player, or nil (which
@@ -368,8 +429,10 @@ func (p *Player) rebuildPlayer(sinkID string) {
 }
 
 // checkAccount reads the account profile once after login: it sets the
-// player country code for media restrictions and rejects non-Premium
-// accounts explicitly (librespot requires Premium, spec S13/S15).
+// player country code for media restrictions. It never inspects product:
+// the field no longer exists for Development Mode apps, so nothing here may
+// claim anything about the subscription (spec S21); playback failures
+// surface with their real causes instead.
 func (p *Player) checkAccount() {
 	p.mu.Lock()
 	sess := p.sess
@@ -385,7 +448,6 @@ func (p *Player) checkAccount() {
 	}
 	var me struct {
 		Country string `json:"country"`
-		Product string `json:"product"`
 	}
 	if json.Unmarshal(body, &me) != nil {
 		return
@@ -396,8 +458,27 @@ func (p *Player) checkAccount() {
 	if live != nil && len(me.Country) == 2 {
 		live.SetCountryCode(me.Country)
 	}
-	if me.Product != "" && me.Product != "premium" {
-		p.emit(library.Event{Type: library.EventFailed,
-			Err: fmt.Errorf("premium required · this account is %q and librespot needs Spotify Premium", me.Product)})
+}
+
+// sessionClientIDs is the ordered list of client ids to try when bootstrapping
+// the embedded session. The configured dashboard id goes first because the
+// access token was minted for it; librespot's own default (empty) is the
+// fallback because the session's client-token exchange has rejected dashboard
+// ids with a bare 400 (L20).
+func sessionClientIDs(configured string) []string {
+	if configured == "" {
+		return []string{""}
 	}
+	return []string{configured, ""}
+}
+
+// isClientTokenRejection reports whether err looks like the client-token
+// exchange refusing our client id — the one bootstrap failure that a different
+// id can fix.
+func isClientTokenRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "client token") || strings.Contains(msg, "clienttoken")
 }
