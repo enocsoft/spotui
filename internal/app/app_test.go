@@ -423,3 +423,17 @@ func TestPlayerErrorViewDoesNotAssumePremium(t *testing.T) {
 		t.Errorf("failure view should show the real error, got:\n%s", got)
 	}
 }
+
+// TestLoginViewShowsBuildRevision: the screen that shows the auth URL must also
+// say which build produced it, so a stale binary is visible instead of silent.
+func TestLoginViewShowsBuildRevision(t *testing.T) {
+	m := newModel(t, 180, 50)
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventLogin, LoginURL: "https://example.test/auth"}})
+	*m = updated.(Model)
+	if !strings.Contains(m.View(), Revision()) {
+		t.Errorf("login view should name the build revision")
+	}
+	if Revision() == "" {
+		t.Errorf("Revision must never be empty")
+	}
+}

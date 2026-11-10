@@ -172,6 +172,7 @@ func (m Model) loginView() string {
 		theme.MetaStyle.Render("the callback lands on " + loginCallbackURL(m.cfg.CallbackPort) +
 			" — playback starts when you return"),
 		"",
+		theme.MetaStyle.Render("build " + Revision()),
 		theme.LabelStyle.Render("ctrl+c quit"),
 	})
 }
@@ -187,6 +188,7 @@ func (m Model) playerErrorView() string {
 		"",
 		theme.MetaStyle.Render("usual causes: an account without Premium, or stale credentials in the state dir"),
 		"",
+		theme.MetaStyle.Render("build " + Revision()),
 		theme.LabelStyle.Render("ctrl+c quit"),
 	})
 }
