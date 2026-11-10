@@ -31,7 +31,7 @@ func (p *Player) webApiCall(ctx context.Context, method, path string, query url.
 		return nil, 0, library.ErrNotLoggedIn
 	}
 	log := newCaptureLogger(p.authCfg.StateDir, nil)
-	log.Debugf("catalog call %s %s", method, path)
+	log.Debugf("catalog call %s %s?%s", method, path, query.Encode())
 	body2, status, err := sess.WebApiWith429RetryAndReadBody(ctx, method, path, query, body)
 	log.Debugf("catalog done %s %s status=%d err=%v bytes=%d", method, path, status, err, len(body2))
 	return body2, status, err
