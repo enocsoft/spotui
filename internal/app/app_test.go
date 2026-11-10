@@ -437,3 +437,49 @@ func TestLoginViewShowsBuildRevision(t *testing.T) {
 		t.Errorf("Revision must never be empty")
 	}
 }
+
+const longAuthURL = "https://accounts.spotify.com/authorize?client_id=abc123&code_challenge=Q2xhc3NpYy1jaGFsbGVuZ2U&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Flogin&response_type=code&scope=user-read-private+user-read-playback-state&state=st4te"
+
+// TestWrapURLKeepsEveryParameter: wrapping must not drop a single byte. A URL
+// that reaches the browser without response_type makes the server answer
+// "response_type must be code" and sends the reader hunting the wrong bug.
+func TestWrapURLKeepsEveryParameter(t *testing.T) {
+	chunks := wrapURL(longAuthURL, 60)
+	if got := strings.Join(chunks, ""); got != longAuthURL {
+		t.Fatalf("wrapping lost bytes:\n got %q\nwant %q", got, longAuthURL)
+	}
+	for i, c := range chunks {
+		if len(c) > 60 {
+			t.Errorf("chunk %d is %d wide, want <= 60", i, len(c))
+		}
+		if i > 0 && !strings.HasPrefix(c, "&") {
+			t.Errorf("chunk %d should start on a parameter boundary: %q", i, c)
+		}
+	}
+	if !strings.Contains(strings.Join(chunks, ""), "response_type=code") {
+		t.Errorf("response_type must survive wrapping")
+	}
+}
+
+// TestLoginViewKeepsTheWholeURL: at 80 columns the screen cannot show a 300
+// character URL on one line, so it wraps it and names the file holding it
+// verbatim. Truncating it is what broke a real login attempt.
+func TestLoginViewKeepsTheWholeURL(t *testing.T) {
+	m := newModel(t, 80, 24)
+	updated, _ := m.Update(playerEventMsg{library.Event{
+		Type: library.EventLogin, LoginURL: longAuthURL, LoginFile: "/state/login-url.txt",
+	}})
+	*m = updated.(Model)
+	view := m.View()
+	if !strings.Contains(strings.Join(strings.Fields(view), ""), "response_type=code") {
+		t.Errorf("login view at 80 columns lost response_type=code:\n%s", view)
+	}
+	if !strings.Contains(view, "/state/login-url.txt") {
+		t.Errorf("login view should name the file with the full URL")
+	}
+	for i, line := range lines(m) {
+		if w := visibleWidth(line); w > 80 {
+			t.Errorf("line %d is %d columns wide", i, w)
+		}
+	}
+}

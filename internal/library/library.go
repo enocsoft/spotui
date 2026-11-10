@@ -118,9 +118,13 @@ const (
 // Event is one player notification pushed to the UI loop. The UI mirrors
 // state by re-reading Session(); it never advances progress optimistically.
 type Event struct {
-	Type     EventType
+	Type EventType
+	// LoginURL is the authorization URL the user must open.
 	LoginURL string
-	Err      error
+	// LoginFile is where the same URL was written verbatim, because a long
+	// authorization URL cannot be read or copied from a truncated screen line.
+	LoginFile string
+	Err       error
 }
 
 // PlayerEvents is implemented by players that push state updates. The TUI

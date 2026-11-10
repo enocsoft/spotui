@@ -161,20 +161,52 @@ func (m Model) messageView(lines []string) string {
 // loginView surfaces the interactive auth URL instead of hanging silently
 // (spec S9): the URL and where the callback lands, keys at the bottom.
 func (m Model) loginView() string {
-	return m.messageView([]string{
+	lines := []string{
 		"",
 		theme.TitleStyle.Render("login required"),
 		"",
 		theme.ValueStyle.Render("open this URL in a browser and approve the Spotify access:"),
 		"",
-		theme.AccentStyle.Render(truncate(m.loginURL, m.w-2)),
+	}
+	for _, chunk := range wrapURL(m.loginURL, m.w-4) {
+		lines = append(lines, theme.AccentStyle.Render(chunk))
+	}
+	if m.loginFile != "" {
+		lines = append(lines, theme.MetaStyle.Render("full URL saved to "+m.loginFile))
+	}
+	lines = append(lines,
 		"",
-		theme.MetaStyle.Render("the callback lands on " + loginCallbackURL(m.cfg.CallbackPort) +
+		theme.MetaStyle.Render("the callback lands on "+loginCallbackURL(m.cfg.CallbackPort)+
 			" — playback starts when you return"),
 		"",
-		theme.MetaStyle.Render("build " + Revision()),
+		theme.MetaStyle.Render("build "+Revision()),
 		theme.LabelStyle.Render("ctrl+c quit"),
-	})
+	)
+	return m.messageView(lines)
+}
+
+// wrapURL breaks a long URL into chunks that fit width, cutting at "&" so every
+// line ends on a parameter boundary. A URL is not a list to truncate: a cut URL
+// reaches the browser without parameters and the server blames the wrong thing
+// (a lost response_type reads as "response_type must be code").
+func wrapURL(raw string, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+	if len(raw) <= width {
+		return []string{raw}
+	}
+	var out []string
+	rest := raw
+	for len(rest) > width {
+		cut := strings.LastIndex(rest[:width], "&")
+		if cut <= 0 {
+			cut = width
+		}
+		out = append(out, rest[:cut])
+		rest = rest[cut:]
+	}
+	return append(out, rest)
 }
 
 // playerErrorView surfaces a bootstrap failure (auth, no Premium, dead

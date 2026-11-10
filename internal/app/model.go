@@ -70,7 +70,8 @@ type Model struct {
 
 	eventCh   <-chan library.Event // real-player events; nil for the mock
 	loginURL  string               // non-empty: full-screen login state (S9)
-	playerErr error                // non-nil: full-screen player error state
+	loginFile string
+	playerErr error // non-nil: full-screen player error state
 
 	w, h         int
 	section      Section
@@ -169,9 +170,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playerEventMsg:
 		switch msg.Type {
 		case library.EventLogin:
-			m.loginURL = msg.LoginURL
+			m.loginURL, m.loginFile = msg.LoginURL, msg.LoginFile
 		case library.EventReady:
-			m.loginURL, m.playerErr = "", nil
+			m.loginURL, m.loginFile, m.playerErr = "", "", nil
 		case library.EventFailed:
 			m.playerErr = msg.Err
 		}

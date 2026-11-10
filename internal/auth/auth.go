@@ -481,3 +481,17 @@ func (c Config) EnsureToken(ctx context.Context, onAuthorizeURL func(string)) (T
 	}
 	return tok, nil
 }
+
+// WriteLoginURL saves the authorization URL verbatim into dir and returns the
+// path. Terminal screens truncate long URLs, and a URL missing parameters makes
+// the server reject the request with a message that blames the wrong thing.
+func WriteLoginURL(dir, rawURL string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "login-url.txt")
+	if err := os.WriteFile(path, []byte(rawURL+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}

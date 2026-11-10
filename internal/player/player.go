@@ -263,7 +263,13 @@ func (p *Player) onAuthorizeURL(url string) {
 	p.mu.Lock()
 	p.loginURL = url
 	p.mu.Unlock()
-	p.emit(library.Event{Type: library.EventLogin, LoginURL: url})
+	file := ""
+	if stateDir := p.authCfg.StateDir; stateDir != "" {
+		if path, werr := auth.WriteLoginURL(stateDir, url); werr == nil {
+			file = path
+		}
+	}
+	p.emit(library.Event{Type: library.EventLogin, LoginURL: url, LoginFile: file})
 }
 
 // fail records a bootstrap failure and surfaces it to the UI.
