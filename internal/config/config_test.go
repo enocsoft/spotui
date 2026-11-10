@@ -26,7 +26,7 @@ func TestLoadFromMissingFile(t *testing.T) {
 		t.Errorf("error %q should name the missing path %q", err, path)
 	}
 	if !strings.Contains(err.Error(), "client_id") {
-		t.Errorf("error %q should tell the user what to put in the file", err)
+		t.Errorf("error %q should tell the user how to create it", err)
 	}
 }
 

@@ -43,6 +43,17 @@ func main() {
 		return
 	}
 
+	// --provider is the first-run setup: ask for the dashboard client id and
+	// store it. It must run before config.Load, because its whole purpose is to
+	// cope with a config that does not exist yet.
+	if len(os.Args) > 1 && (os.Args[1] == "-provider" || os.Args[1] == "--provider") {
+		if err := runProvider(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

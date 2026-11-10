@@ -142,7 +142,7 @@ func LoadFrom(path string) (Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Config{}, fmt.Errorf(
-				"spotui: no config file at %s — create it with:  client_id = \"your-spotify-client-id\"", path)
+				"spotui: no config file at %s — run \"spotui --provider\" to store your Spotify app client_id", path)
 		}
 		return Config{}, fmt.Errorf("spotui: cannot read %s: %v", path, err)
 	}
@@ -187,7 +187,7 @@ func LoadFrom(path string) (Config, error) {
 	}
 	if cfg.ClientID == "" {
 		return Config{}, fmt.Errorf(
-			"spotui: %s is missing client_id — add:  client_id = \"your-spotify-client-id\"", path)
+			"spotui: %s is missing client_id — run \"spotui --provider\" to set it", path)
 	}
 	if cfg.CallbackPort == 0 {
 		cfg.CallbackPort = DefaultCallbackPort
