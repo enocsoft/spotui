@@ -22,12 +22,34 @@ import (
 // Catalog implements library.CatalogProvider: the UI drives every fetch from
 // a tea.Cmd goroutine through this library.Fetch, never from Update.
 func (p *Player) Catalog() library.Fetch {
+	logf := newCaptureLogger(p.authCfg.StateDir, nil).Debugf
 	client := library.NewHTTPClient(p.webTokens)
 	client.Base = p.webBase
 	client.HTTP = p.http
-	client.Logf = newCaptureLogger(p.authCfg.StateDir, nil).Debugf
+	client.Logf = logf
 	return library.NewWebAPI(client).
-		WithContentsResolver(p.contextResolver(), p.metadataBatch())
+		WithContentsResolver(p.contextResolver(), p.metadataBatch()).
+		WithCollectionContext(p.collectionContext()).
+		WithLogger(logf)
+}
+
+// collectionContext is the saved-tracks fallback's context uri seam: the
+// user's saved songs are the collection context
+// spotify:user:<user id>:collection, and the user id comes from the playback
+// session's own username — the Web API denied GET /v1/me/tracks, so the
+// fallback never asks it who the user is. It reads the session under the
+// player mutex; before the session is live it fails with the honest error
+// the saved-tracks error renders.
+func (p *Player) collectionContext() library.CollectionContext {
+	return func(ctx context.Context) (string, error) {
+		p.mu.Lock()
+		sess := p.sess
+		p.mu.Unlock()
+		if sess == nil {
+			return "", errors.New("no embedded session")
+		}
+		return "spotify:user:" + sess.Username() + ":collection", nil
+	}
 }
 
 // contextResolver is the catalog's playlist-contents seam: the same context

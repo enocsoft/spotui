@@ -13,6 +13,9 @@
 // What still rides the Web API (2026 constraints baked in, spec S14, L7):
 //   - playlists: GET /v1/me/playlists, 50 per page, `next` followed lazily;
 //   - search: GET /v1/search with limit capped at 10, offset pagination;
+//   - saved songs: GET /v1/me/tracks, with a collection-resolve fallback
+//     (spotify:user:<id>:collection) when the endpoint is denied by policy
+//     (410/403 — a Development Mode app), library/saved_collection.go;
 //   - saved toggle: generic PUT /v1/library and DELETE /me/library — the
 //     per-type endpoints (me/tracks, …) are gone;
 //   - 429 is never retried invisibly: one surfaced 429 becomes the
@@ -62,9 +65,11 @@ func (f WebAPIClientFunc) Call(ctx context.Context, method, path string, query u
 // does); without it Items fails with the honest error the UI renders. Safe
 // for concurrent use as long as the client is (the session accessor is).
 type WebAPI struct {
-	client  WebAPIClient
-	resolve ContextResolver // the playback context resolver,
-	batch   MetadataBatch   // fallback names for thin context entries
+	client     WebAPIClient
+	resolve    ContextResolver   // the playback context resolver,
+	batch      MetadataBatch     // fallback names for thin context entries
+	collection CollectionContext // the saved-songs fallback: spotify:user:<id>:collection
+	logf       func(format string, args ...any)
 }
 
 // NewWebAPI builds the real catalog over the given accessor.
@@ -76,6 +81,24 @@ func NewWebAPI(client WebAPIClient) *WebAPI { return &WebAPI{client: client} }
 // for wiring-time chaining.
 func (w *WebAPI) WithContentsResolver(resolve ContextResolver, batch MetadataBatch) *WebAPI {
 	w.resolve, w.batch = resolve, batch
+	return w
+}
+
+// WithCollectionContext wires the saved-tracks fallback: when the Web API
+// denies GET /v1/me/tracks (410, or 403), the saved songs resolve through
+// the same playback resolver as playlist contents, as
+// spotify:user:<user id>:collection (library/saved_collection.go). It
+// returns the same WebAPI for wiring-time chaining.
+func (w *WebAPI) WithCollectionContext(collection CollectionContext) *WebAPI {
+	w.collection = collection
+	return w
+}
+
+// WithLogger wires the debug log the saved-tracks routes report through:
+// which status the Web API call received and which route served the list.
+// It returns the same WebAPI for wiring-time chaining.
+func (w *WebAPI) WithLogger(logf func(format string, args ...any)) *WebAPI {
+	w.logf = logf
 	return w
 }
 
@@ -245,7 +268,28 @@ func releaseYear(date string) string {
 // down; the row keeps the facts the track table renders and drops added_at —
 // the table has no ADDED column where no view carries dates (S27). Every
 // mapped row is saved by definition: this list IS the saved set.
+//
+// A Development Mode app can be denied the endpoint with a policy status
+// (410 Gone — the status the SAVED group actually saw — or 403) while the
+// route stays on Spotify's endpoint list. When one of those denials arrives
+// and a collection fallback is wired, the page is served through the
+// session's collection resolve instead (saved_collection.go): the same
+// saved set, no Web API quota, and the log names the route that served it.
 func (w *WebAPI) SavedTracks(ctx context.Context, offset int) (SavedTracksPage, error) {
+	page, err := w.savedTracksViaWebAPI(ctx, offset)
+	if err == nil {
+		w.logfSaved("saved tracks served by Web API GET /v1/me/tracks (%d tracks, total %d)", len(page.Tracks), page.Total)
+		return page, nil
+	}
+	if !endpointDenial(err) || w.resolve == nil {
+		return page, err
+	}
+	return w.savedTracksViaCollection(ctx, offset, err)
+}
+
+// savedTracksViaWebAPI is the Web API leg of SavedTracks: one paged GET
+// /v1/me/tracks, decoded into the saved-track model.
+func (w *WebAPI) savedTracksViaWebAPI(ctx context.Context, offset int) (SavedTracksPage, error) {
 	q := url.Values{}
 	q.Set("limit", strconv.Itoa(playlistPageLimit))
 	q.Set("offset", strconv.Itoa(offset))
