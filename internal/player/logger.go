@@ -46,10 +46,12 @@ var longSecret = regexp.MustCompile(`[A-Za-z0-9+/=_-]{40,}`)
 
 func (l *captureLogger) writef(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	msg = longSecret.ReplaceAllString(msg, "<redacted>")
+	// Hand the URL over before redaction: it is not a secret (a challenge and a
+	// state, no token) and the UI has to show it whole. Redaction is for the file.
 	if strings.HasPrefix(msg, loginLinkPrefix) && l.onLogin != nil {
 		l.onLogin(strings.TrimPrefix(msg, loginLinkPrefix))
 	}
+	msg = longSecret.ReplaceAllString(msg, "<redacted>")
 	if l.fields != "" {
 		msg = l.fields + " " + msg
 	}

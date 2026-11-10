@@ -172,3 +172,19 @@ func TestLoggerRedactsSecrets(t *testing.T) {
 		t.Errorf("the message itself must survive redaction: %s", got)
 	}
 }
+
+// TestLoginURLIsHandedOverWhole: redaction must not reach the authorization URL.
+// It is a challenge and a state, not a token, and a redacted URL cannot be opened.
+func TestLoginURLIsHandedOverWhole(t *testing.T) {
+	const url = "https://accounts.spotify.com/authorize?client_id=0123456789abcdef0123456789abcdef&code_challenge=Q2xhc3NpYy1jaGFsbGVuZ2UtdmFsdWUtMTIzNDU2Nzg5&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Flogin&response_type=code&scope=streaming&state=UAtdFGUIBz1Nhmqp5lV-L6lP8Y9sWoI"
+	var got string
+	var buf bytes.Buffer
+	l := &captureLogger{w: &buf, onLogin: func(u string) { got = u }}
+	l.Infof("to complete authentication visit the following link: %s", url)
+	if got != url {
+		t.Errorf("the login URL must reach the UI whole:\n got %q\nwant %q", got, url)
+	}
+	if strings.Contains(buf.String(), "0123456789abcdef") {
+		t.Errorf("the log file must still redact the URL: %s", buf.String())
+	}
+}

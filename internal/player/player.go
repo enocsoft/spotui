@@ -116,7 +116,7 @@ func New(opts Options, content library.DataSource) *Player {
 
 // bootstrapTimeout bounds the session handshake: a hang must become an error
 // with a log to read, not a frozen screen.
-const bootstrapTimeout = 45 * time.Second
+const loginTimeout = 10 * time.Minute
 
 // Start launches the session bootstrap in the background. Progress arrives
 // through Events() as EventLogin / EventReady / EventFailed.
@@ -160,69 +160,35 @@ func (p *Player) emit(ev library.Event) {
 // run owns the login (spec S20), the session bootstrap and then pumps
 // player events until the context dies.
 func (p *Player) run() {
-	log := newCaptureLogger(p.authCfg.StateDir, nil)
+	log := newCaptureLogger(p.authCfg.StateDir, p.onAuthorizeURL)
 
-	// The app owns the login: OAuth Authorization Code + PKCE against
-	// accounts.spotify.com with a local /login callback (spec S20). The
-	// library's interactive flow is dead — Spotify removed the implicit
-	// grant (response_type=token) on 2025-11-27 (L21) — so the token is
-	// produced here and handed over as SpotifyTokenCredentials.
-	tok, err := p.authCfg.EnsureToken(p.baseCtx, p.onAuthorizeURL)
-	if err != nil {
-		p.fail(err)
-		return
-	}
-	// The token is in hand: leave the login screen now. Waiting for the profile
-	// call below kept the URL on screen with no sign of life, which reads as a
-	// dead app even though the login already succeeded.
-	p.mu.Lock()
-	p.loginURL = ""
-	p.mu.Unlock()
+	// Let the library own the session login. Its InteractiveCredentials path is
+	// already Authorization Code + PKCE (session.go builds AuthCodeURL with S256 over
+	// http://127.0.0.1:<port>/login) and it is the only path that yields access-point
+	// credentials: a Web API token handed over as SpotifyTokenCredentials fails the
+	// access point with BadCredentials, because that point wants a session token, not
+	// a Web API one.
+	//
+	// ClientId stays empty on purpose. session.ClientId falls back to
+	// librespot.ClientIdHex, and only that client's token carries the `username`
+	// claim the access point requires; passing a dashboard client id replaces it and
+	// breaks the flow.
+	//
+	// Accepted cost: the dashboard app in config.toml is used by the Web API (library
+	// and search) and not by playback.
 	p.emit(library.Event{Type: library.EventConnecting})
 
-	// Freshly minted tokens carry no user id yet; a cached one does.
-	if tok.UserID == "" {
-		userID, err := p.authCfg.FetchUserID(p.baseCtx, tok.AccessToken)
-		if err != nil {
-			p.fail(err)
-			return
-		}
-		tok.UserID = userID
-		if err := p.authCfg.SaveToken(tok); err != nil {
-			p.fail(err)
-			return
-		}
-	}
-
-	// The dashboard client id is the right partner for a token our PKCE flow
-	// minted, but librespot still runs its own client-token exchange during
-	// bootstrap, and that exchange has rejected a dashboard client id with a
-	// bare 400 (L20). Do not guess which id the server wants today: try the
-	// configured one, fall back to librespot's default, report what failed.
-	candidates := sessionClientIDs(p.opts.ClientID)
-	var sess *session.Session
-	var bootErr error
-	for i, clientID := range candidates {
-		// A bootstrap that never returns is worse than one that fails: bound it.
-		bootCtx, cancel := context.WithTimeout(p.baseCtx, bootstrapTimeout)
-		sess, _, bootErr = sessionconfig.NewSessionFromConfigDir(bootCtx, log, sessionconfig.Options{
-			ConfigDir:    p.opts.ConfigDir,
-			CallbackPort: p.opts.CallbackPort,
-			DeviceType:   "computer",
-			ClientId:     clientID,
-			// A value, not a pointer: the library type-switches on the concrete
-			// type, and *session.SpotifyTokenCredentials lands in the default case
-			// as "unknown credentials: *session.SpotifyTokenCredentials".
-			Credentials: session.SpotifyTokenCredentials{Username: tok.UserID, Token: tok.AccessToken},
-		})
-		cancel()
-		if bootErr == nil {
-			break
-		}
-		if !isClientTokenRejection(bootErr) || i == len(candidates)-1 {
-			break
-		}
-	}
+	// Human-paced: the wait covers the browser consent, so the cap is generous. It
+	// exists to turn a silent hang into a message, not to rush a login.
+	bootCtx, cancel := context.WithTimeout(p.baseCtx, loginTimeout)
+	defer cancel()
+	sess, _, bootErr := sessionconfig.NewSessionFromConfigDir(bootCtx, log, sessionconfig.Options{
+		ConfigDir:    p.opts.ConfigDir,
+		CallbackPort: p.opts.CallbackPort,
+		DeviceType:   "computer",
+		ClientId:     "",
+		Credentials:  session.InteractiveCredentials{CallbackPort: p.opts.CallbackPort},
+	})
 	if bootErr != nil {
 		p.fail(bootErr)
 		return
