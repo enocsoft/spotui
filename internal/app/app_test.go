@@ -500,3 +500,21 @@ func TestConnectingStateIsVisible(t *testing.T) {
 		t.Errorf("ready must leave the connecting state")
 	}
 }
+
+// TestFailureAfterLoginIsVisible: the login screen used to outrank the error view,
+// so a session failure after the URL was shown displayed the URL and nothing else —
+// indistinguishable from "still waiting".
+func TestFailureAfterLoginIsVisible(t *testing.T) {
+	m := newModel(t, 80, 24)
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventLogin, LoginURL: "https://example.test/auth", LoginFile: "/f"}})
+	*m = updated.(Model)
+	updated, _ = m.Update(playerEventMsg{library.Event{Type: library.EventFailed, Err: errors.New("failed exchanging oauth2 code: 400")}})
+	*m = updated.(Model)
+	view := m.View()
+	if !strings.Contains(view, "player error") {
+		t.Errorf("a failure after the login URL must be visible, got:\n%s", view)
+	}
+	if strings.Contains(view, "login required") {
+		t.Errorf("the login screen must not outrank the error")
+	}
+}

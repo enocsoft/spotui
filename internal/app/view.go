@@ -121,14 +121,14 @@ func (m Model) View() string {
 	if m.w < minWidth {
 		return m.refusalView()
 	}
+	if m.playerErr != nil {
+		return m.playerErrorView()
+	}
 	if m.connecting {
 		return m.connectingView()
 	}
 	if m.loginURL != "" {
 		return m.loginView()
-	}
-	if m.playerErr != nil {
-		return m.playerErrorView()
 	}
 	var out []string
 	out = append(out, m.topBar(m.w), rule(m.w), m.contextStrip(m.w), rule(m.w))

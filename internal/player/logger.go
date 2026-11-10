@@ -26,13 +26,14 @@ type captureLogger struct {
 
 func newCaptureLogger(stateDir string, onLogin func(url string)) *captureLogger {
 	w := io.Writer(os.Stderr)
-	// bubbletea owns the screen, so anything written to stderr is invisible while
-	// the TUI runs. Mirror it to a file: a hang during the session bootstrap leaves
-	// no other evidence behind.
+	// bubbletea owns the screen: writing to stderr from here corrupts the frame and
+	// pushes log lines into the UI (it showed up as stray "ctrl+c quit" lines over the
+	// view). The file is the only sink while the TUI runs; stderr is the fallback for
+	// a run with no state dir.
 	if stateDir != "" {
 		if err := os.MkdirAll(stateDir, 0o700); err == nil {
 			if f, err := os.OpenFile(filepath.Join(stateDir, "player.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-				w = io.MultiWriter(os.Stderr, f)
+				w = f
 			}
 		}
 	}

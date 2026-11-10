@@ -180,7 +180,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case library.EventReady:
 			m.loginURL, m.loginFile, m.playerErr, m.connecting = "", "", nil, false
 		case library.EventFailed:
-			m.playerErr, m.connecting = msg.Err, false
+			// Clearing the URL matters: the login screen outranks the error view,
+			// so a failure after the URL was shown used to hide itself.
+			m.playerErr, m.connecting, m.loginURL, m.loginFile = msg.Err, false, "", ""
 		}
 		return m, m.rearmEvents()
 
