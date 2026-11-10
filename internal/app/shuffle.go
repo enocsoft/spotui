@@ -184,7 +184,10 @@ func (m *Model) followTrack(id string) {
 
 // shuffleStep walks the shuffled list (dir 1 next, -1 previous) through the
 // existing play path. It reports ok=false when shuffle is off, leaving the
-// session's own next/previous untouched.
+// session's own next/previous untouched. The walk target is recorded before
+// the play is submitted: while the first press is still in flight, the
+// second one walks from where the first will land — two rapid presses stay
+// two ordered skips, not one repeated track.
 func (m *Model) shuffleStep(dir int) (tea.Cmd, bool) {
 	if !m.shuffleOn {
 		return nil, false
@@ -195,13 +198,36 @@ func (m *Model) shuffleStep(dir int) (tea.Cmd, bool) {
 	}
 	cur := m.shufflePosition(order)
 	next := order[((cur+dir)%len(order)+len(order))%len(order)]
+	m.walks = append(m.walks, next.ID)
 	return m.playRow(next), true
 }
 
+// walkDone drops the first pending walk with this id: the play landed (or
+// failed) and the session is the truth again. Called from applyPlayerMsg.
+func (m *Model) walkDone(id string) {
+	for i, w := range m.walks {
+		if w == id {
+			m.walks = append(m.walks[:i], m.walks[i+1:]...)
+			return
+		}
+	}
+}
+
 // shufflePosition resolves where a walk through the shuffled list starts:
-// the playing track first, else the track under the cursor, else -1 (the
+// a walk already in flight first (the next press must continue where the
+// first one left off — the session has not learned about that play yet),
+// else the playing track, else the track under the cursor, else -1 (the
 // walk starts at the top of the shuffled list).
 func (m Model) shufflePosition(order []library.Track) int {
+	if n := len(m.walks); n > 0 {
+		if id := m.walks[n-1]; id != "" {
+			for i, t := range order {
+				if t.ID == id {
+					return i
+				}
+			}
+		}
+	}
 	if id := m.data.Session().TrackID; id != "" {
 		for i, t := range order {
 			if t.ID == id {

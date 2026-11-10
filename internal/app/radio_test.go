@@ -236,8 +236,9 @@ func TestRadioBoundaryFiresOnce(t *testing.T) {
 	if !fired {
 		t.Fatal("the end-of-track boundary did not fire")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if got := len(rp.played); got != 1 {
 		t.Fatalf("the resolved track must play exactly once, played %d", got)
 	}
@@ -281,14 +282,15 @@ func TestRadioSeedsWithCurrentAndRecent(t *testing.T) {
 
 	// the user played a track through the list first: it lands in the recent
 	// uris the resolver sees
-	m.playRow(library.Track{ID: realTrackID, Title: "So What", Duration: 100 * time.Second})
+	runPlayerCmds(t, m, m.playRow(library.Track{ID: realTrackID, Title: "So What", Duration: 100 * time.Second}))
 	radioAtEnd(data)
 	msg, fired := runRadioTick(t, m)
 	if !fired {
 		t.Fatal("the end-of-track boundary did not fire")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if len(rp.calls) != 1 {
 		t.Fatalf("expected exactly one resolve call, got %d", len(rp.calls))
 	}
@@ -321,8 +323,9 @@ func TestRadioLeavesOpenListUntouched(t *testing.T) {
 	if !fired {
 		t.Fatal("the end-of-track boundary did not fire")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if got := len(m.visibleRows()); got != rowsBefore {
 		t.Errorf("the open list changed while radio ran: %d rows, was %d", got, rowsBefore)
 	}
@@ -354,8 +357,9 @@ func TestRadioOffStopsAtEnd(t *testing.T) {
 	if !fired {
 		t.Fatal("the end-of-track boundary did not fire")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if len(rp.played) != 1 {
 		t.Fatalf("the resolved track must play once, played %d", len(rp.played))
 	}
@@ -383,8 +387,9 @@ func TestRadioResolveErrorToastsAndStops(t *testing.T) {
 	if !fired {
 		t.Fatal("the end-of-track boundary did not fire")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if len(rp.played) != 0 {
 		t.Error("a failed resolve must never play anything")
 	}
@@ -429,8 +434,9 @@ func TestRadioFiresWhenTrackStopsParkedAtEnd(t *testing.T) {
 	if !fired {
 		t.Fatal("the track stopping parked at its end must fire the boundary")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if len(rp.played) != 1 {
 		t.Errorf("the resolved track must play once, played %d", len(rp.played))
 	}
@@ -470,10 +476,11 @@ func TestRadioStaleResolveKeepsTheTickAlive(t *testing.T) {
 		t.Fatal("the boundary must fire before the resolve can go stale")
 	}
 	press(t, m, "R") // radio off while the answer is in flight
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 
-	updated, cmd := m.Update(tickMsg{})
+	updated, cmd = m.Update(tickMsg{})
 	*m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("the one-second tick died with the stale resolve")
@@ -503,8 +510,9 @@ func TestRadioStaleResolveDoesNotInterruptANewTrack(t *testing.T) {
 	if err := rp.Play(library.Track{ID: otherID, Title: "Something else"}); err != nil {
 		t.Fatalf("manual play failed: %v", err)
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 
 	if len(rp.played) != 1 || rp.played[0].ID != otherID {
 		t.Fatalf("the stale resolve interrupted the user's track: played %v", rp.played)
@@ -526,8 +534,9 @@ func TestRadioPlayFailureStopsRadio(t *testing.T) {
 	if !fired {
 		t.Fatal("the boundary must fire")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 
 	if m.radioOn {
 		t.Error("radio must turn off when the resolved track cannot play")
@@ -540,10 +549,15 @@ func TestRadioPlayFailureStopsRadio(t *testing.T) {
 	}
 }
 
-// TestMain shrinks the live-state poll: the radio boundary needs consecutive
-// ticks and a real second per tick dominated the suite's runtime.
+// TestMain shrinks every wall-clock timer the helpers drive: the live-state
+// poll (the radio boundary needs consecutive ticks and a real second per tick
+// dominated the suite), the 3s toast tick and the 250ms search debounce —
+// the async-harness helpers run whatever a keypress returned, so every
+// blocking tick must come back instantly.
 func TestMain(m *testing.M) {
 	tickInterval = time.Millisecond
+	toastTimeout = time.Millisecond
+	searchDebounce = time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -565,8 +579,9 @@ func TestRadioFiresWhenThePositionStopsShortOfTheEnd(t *testing.T) {
 	if !fired {
 		t.Fatal("a frozen position inside the end band must fire the boundary")
 	}
-	updated, _ := m.Update(msg)
+	updated, cmd := m.Update(msg)
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 	if len(rp.played) != 1 {
 		t.Fatalf("the resolved track must play, played %d", len(rp.played))
 	}

@@ -208,10 +208,11 @@ func (m *Model) applyItems(msg itemsMsg) tea.Cmd {
 			return m.setToast("✗ nothing playable in " + m.plName)
 		}
 		first := m.plTracks[0]
-		if err := m.player.Play(first); err != nil {
-			return m.setToast("✗ " + err.Error())
-		}
-		return m.setToast("▶ " + first.Title)
+		return m.submitPlayer(playerTask{
+			op:    opPlayContext,
+			track: first,
+			run:   func() error { return m.player.Play(first) },
+		})
 	}
 	return nil
 }

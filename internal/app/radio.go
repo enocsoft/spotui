@@ -131,14 +131,14 @@ func (m *Model) applyRadioResolved(msg radioResolvedMsg) tea.Cmd {
 	}
 	next := msg.tracks[0]
 	m.radioUpNext = msg.tracks[1:]
-	if err := m.player.Play(next); err != nil {
-		// R4-003: a failed play must not leave radio "on" with a queue that will
-		// never sound. Unlatch and stop, naming the reason once.
-		m.radioOn, m.radioUpNext, m.radioFiredID = false, nil, ""
-		return m.setToast("✗ radio: " + err.Error())
-	}
-	m.notePlayed(next.ID)
-	return m.setToast("▶ " + next.Title)
+	// The play itself rides the serialized queue: the failure arrives as a
+	// playerMsg latched to this boundary, and only there does radio stop.
+	return m.submitPlayer(playerTask{
+		op:      opRadioPlay,
+		track:   next,
+		latchID: msg.trackID,
+		run:     func() error { return m.player.Play(next) },
+	})
 }
 
 // notePlayed records a successfully played track uri as radio seed history.

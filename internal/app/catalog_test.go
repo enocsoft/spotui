@@ -113,9 +113,10 @@ func newRealModel(t *testing.T, w, h int, fetch library.Fetch) (*Model, *stubPla
 }
 
 // runCatalogCmd executes a tea.Cmd and applies its catalog message (or batch)
-// to the model. Commands that only produce toasts/ticks are discarded — the
-// toast tick would sleep for real — so after a catalog message lands, its own
-// returned command (a toast) is not followed.
+// to the model. Pure timer commands (toast ticks and such) are dropped —
+// bubbletea schedules them for real — so after a catalog message lands, its
+// own returned command (a toast) is not followed. Player results and the
+// plays a resolved context kicks off run through runPlayerCmds.
 func runCatalogCmd(t *testing.T, m *Model, cmd tea.Cmd) {
 	t.Helper()
 	if cmd == nil {
@@ -133,21 +134,30 @@ func applyCatalogMsg(t *testing.T, m *Model, msg tea.Msg) {
 		for _, c := range msg {
 			runCatalogCmd(t, m, c)
 		}
+	case playerMsg:
+		// the async result of a player command: land it like the runtime does
+		updated, _ := m.Update(msg)
+		*m = updated.(Model)
 	case playlistsMsg:
-		updated, _ := m.Update(msg)
+		updated, cmd := m.Update(msg)
 		*m = updated.(Model)
+		runPlayerCmds(t, m, cmd) // a resolved context may play its first track
 	case albumsMsg:
-		updated, _ := m.Update(msg)
+		updated, cmd := m.Update(msg)
 		*m = updated.(Model)
+		runPlayerCmds(t, m, cmd)
 	case itemsMsg:
-		updated, _ := m.Update(msg)
+		updated, cmd := m.Update(msg)
 		*m = updated.(Model)
+		runPlayerCmds(t, m, cmd)
 	case searchMsg:
-		updated, _ := m.Update(msg)
+		updated, cmd := m.Update(msg)
 		*m = updated.(Model)
+		runPlayerCmds(t, m, cmd)
 	case savedMsg:
-		updated, _ := m.Update(msg)
+		updated, cmd := m.Update(msg)
 		*m = updated.(Model)
+		runPlayerCmds(t, m, cmd)
 	}
 }
 
@@ -997,8 +1007,9 @@ func TestSearchEnterOnResultsActs(t *testing.T) {
 
 	// rows: TRACKS header, 2 tracks, ALBUMS header, album, PLAYLISTS header, playlist
 	pressRun(t, m, "j") // onto the first track
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, playCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	*m = updated.(Model)
+	runPlayerCmds(t, m, playCmd) // the play is a command now: run it like the runtime does
 	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
 		t.Errorf("enter on a track result must play it, played %+v", pl.played)
 	}

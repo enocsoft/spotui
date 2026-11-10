@@ -71,6 +71,16 @@ type Model struct {
 	player library.Player
 	clock  func() time.Time
 
+	// pq serializes every player command Update issues (never inline: each
+	// runs as a tea.Cmd, one at a time, in keypress order). Shared by
+	// pointer across the model copies bubbletea hands around.
+	pq *playerQueue
+	// walks holds the shuffle walk targets submitted to the player but not
+	// yet confirmed: while a walk is in flight, the next n/p must walk from
+	// where the first press left off, not from the session the player has
+	// not updated yet (two rapid presses stay two skips).
+	walks []string
+
 	eventCh   <-chan library.Event // real-player events; nil for the mock
 	loginURL  string               // non-empty: full-screen login state (S9)
 	loginFile string
@@ -219,6 +229,7 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 		expanded:     map[string]bool{"PLAYLISTS": true},
 		pendingSaved: map[string]bool{},
 		perm:         seededPerm,
+		pq:           &playerQueue{},
 	}
 	// Real mode: the player exposes the Web API catalog (T7) and the app starts
 	// on the playlists navigation. Mock mode keeps the artboard's open list.
@@ -240,9 +251,9 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 // ActiveSection reports the focused section (used by tests and the status bar).
 func (m *Model) ActiveSection() Section { return m.section }
 
-// Init arms the real-player event relay and the one-second render tick.
+// Init arms the real-player event relay and the state tick.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd()}
+	cmds := []tea.Cmd{m.tickCmd()}
 	if m.eventCh != nil {
 		cmds = append(cmds, waitForEvents(m.eventCh))
 	}
@@ -268,13 +279,32 @@ func (m Model) rearmEvents() tea.Cmd {
 	return waitForEvents(m.eventCh)
 }
 
-// tickInterval is the live-state poll. It is a variable so the suite can shrink it:
-// the radio boundary needs consecutive ticks and one second per tick made the radio
+// tickInterval is the live-state poll while playing (or while radio needs
+// the boundary detector): one variable so the suite can shrink it — the radio
+// boundary needs consecutive ticks and one second per tick made the radio
 // tests take most of the run.
 var tickInterval = time.Second
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
+// idleRefresh is the refresh interval when the session is not playing and
+// radio is off: nothing in the frame moves except the status-bar clock, so a
+// full-frame render every second only burned CPU. The clock stays honest —
+// just thirty times cheaper.
+const idleRefresh = 30 * time.Second
+
+// tickCmd re-arms the state tick at the cadence the session needs.
+func (m Model) tickCmd() tea.Cmd {
+	interval := m.tickIntervalFor()
+	return tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// tickIntervalFor decides the next tick's interval: the live poll while
+// playing (progress) and whenever radio is on (the boundary detector), the
+// slow idle refresh otherwise.
+func (m Model) tickIntervalFor() time.Duration {
+	if m.radioOn || m.data.Session().State == library.StatePlaying {
+		return tickInterval
+	}
+	return idleRefresh
 }
 
 // searchDebounceCmd arms the ~250 ms typing debounce (T19): the tick fires
@@ -285,7 +315,8 @@ func searchDebounceCmd(seq int) tea.Cmd {
 }
 
 // searchDebounce is how long typing must stay quiet before the query runs.
-const searchDebounce = 250 * time.Millisecond
+// A var so the suite can shrink it, exactly like toastTimeout.
+var searchDebounce = 250 * time.Millisecond
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -309,12 +340,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// R4-001: the tick always re-arms itself. Radio only adds a command on
 		// top; if a resolve goes stale, the tick chain must survive it.
 		if cmd := m.radioCheck(); cmd != nil {
-			return m, tea.Batch(tickCmd(), cmd)
+			return m, tea.Batch(m.tickCmd(), cmd)
 		}
-		return m, tickCmd()
+		return m, m.tickCmd()
 
 	case radioResolvedMsg:
 		return m, m.applyRadioResolved(msg)
+
+	case playerMsg:
+		return m, m.applyPlayerMsg(msg)
 
 	case playerEventMsg:
 		switch msg.Type {
@@ -640,10 +674,16 @@ func (m Model) handleRealSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// toastTimeout is how long a toast lives before its tick clears it. A var so
+// the suite can shrink it: helpers that drive the async player plumbing run
+// every command a keypress returned (the way bubbletea schedules them), and a
+// real 3s toast tick would stall every such press.
+var toastTimeout = 3 * time.Second
+
 func (m *Model) setToast(text string) tea.Cmd {
 	m.toast = toast{text: text, seq: m.toast.seq + 1}
 	seq := m.toast.seq
-	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return toastTick{seq: seq} })
+	return tea.Tick(toastTimeout, func(time.Time) tea.Msg { return toastTick{seq: seq} })
 }
 
 func (m *Model) moveCursor(delta int) {

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -126,13 +125,15 @@ func (m Model) trackUnderCursor() (library.Track, bool) {
 
 // playRow plays the track on a row; used by list and search results. Every
 // successful play rides the recently played uris radio seeds with (T26).
-// Radio plays through this same path, outside the open list.
+// Radio plays through this same path, outside the open list. The call runs
+// through the serialized queue: Update returns the command at once and the
+// toast (or the error naming itself) arrives as a playerMsg.
 func (m *Model) playRow(t library.Track) tea.Cmd {
-	if err := m.player.Play(t); err != nil {
-		return m.setToast("✗ " + err.Error())
-	}
-	m.notePlayed(t.ID)
-	return m.setToast("▶ " + t.Title)
+	return m.submitPlayer(playerTask{
+		op:    opPlay,
+		track: t,
+		run:   func() error { return m.player.Play(t) },
+	})
 }
 
 func (m *Model) onEnter() tea.Cmd {
@@ -185,22 +186,19 @@ func (m *Model) onEnter() tea.Cmd {
 
 func (m *Model) onEnqueue() tea.Cmd {
 	if track, ok := m.trackUnderCursor(); ok {
-		if err := m.player.Enqueue(track); err != nil {
-			return m.setToast("✗ " + err.Error())
-		}
-		return m.setToast("queued · " + track.Title)
+		return m.submitPlayer(playerTask{
+			op:    opEnqueue,
+			track: track,
+			run:   func() error { return m.player.Enqueue(track) },
+		})
 	}
 	return m.setToast("a · open a track list first")
 }
 
 func (m *Model) onPause() tea.Cmd {
-	if err := m.player.TogglePause(); err != nil {
-		return m.setToast("✗ " + err.Error())
-	}
-	if m.data.Session().State == library.StatePaused {
-		return m.setToast("paused")
-	}
-	return m.setToast("playing")
+	// The paused/playing toast reads the session after the toggle lands —
+	// now at playerMsg time, the same point in time the inline call read it.
+	return m.submitPlayer(playerTask{op: opPause, run: m.player.TogglePause})
 }
 
 func (m *Model) onNext() tea.Cmd {
@@ -209,13 +207,7 @@ func (m *Model) onNext() tea.Cmd {
 	if cmd, ok := m.shuffleStep(1); ok {
 		return cmd
 	}
-	if err := m.player.Next(); err != nil {
-		return m.setToast("✗ " + err.Error())
-	}
-	if t, ok := m.currentTrack(); ok {
-		return m.setToast("▶ " + t.Title)
-	}
-	return nil
+	return m.submitPlayer(playerTask{op: opNext, run: m.player.Next})
 }
 
 func (m *Model) onPrev() tea.Cmd {
@@ -223,27 +215,16 @@ func (m *Model) onPrev() tea.Cmd {
 	if cmd, ok := m.shuffleStep(-1); ok {
 		return cmd
 	}
-	if err := m.player.Prev(); err != nil {
-		return m.setToast("✗ " + err.Error())
-	}
-	if t, ok := m.currentTrack(); ok {
-		return m.setToast("▶ " + t.Title)
-	}
-	return nil
+	return m.submitPlayer(playerTask{op: opPrev, run: m.player.Prev})
 }
 
 // onVolume steps the player volume up (+1) or down (-1).
 func (m *Model) onVolume(dir int) tea.Cmd {
-	var err error
+	op, run := opVolumeDown, m.player.VolumeDown
 	if dir > 0 {
-		err = m.player.VolumeUp()
-	} else {
-		err = m.player.VolumeDown()
+		op, run = opVolumeUp, m.player.VolumeUp
 	}
-	if err != nil {
-		return m.setToast("✗ " + err.Error())
-	}
-	return m.setToast(fmt.Sprintf("volume %d%%", m.data.Session().Volume))
+	return m.submitPlayer(playerTask{op: op, run: run})
 }
 
 // onToggle handles `l`: expand/collapse on library headers, saved toggle on
@@ -364,11 +345,12 @@ func (m *Model) execCommand() tea.Cmd {
 		}
 		if tgt.Kind == library.TargetTrack {
 			// unchanged track path (T25): the id plays exactly as before
-			if err := m.player.Play(library.Track{ID: tgt.ID}); err != nil {
-				return m.setToast("✗ " + err.Error())
-			}
-			m.notePlayed(tgt.ID)
-			return m.setToast("▶ " + tgt.ID)
+			t := library.Track{ID: tgt.ID}
+			return m.submitPlayer(playerTask{
+				op:    opPlay,
+				track: t,
+				run:   func() error { return m.player.Play(t) },
+			})
 		}
 		if m.fetch == nil {
 			return m.setToast("✗ :play playlist and album targets need the real catalog — mock mode has no resolver")

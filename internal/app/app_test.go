@@ -26,14 +26,54 @@ func newModel(t *testing.T, w, h int) *Model {
 
 func press(t *testing.T, m *Model, key string) {
 	t.Helper()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
 }
 
 func pressKey(t *testing.T, m *Model, keyType tea.KeyType) {
 	t.Helper()
-	updated, _ := m.Update(tea.KeyMsg{Type: keyType})
+	updated, cmd := m.Update(tea.KeyMsg{Type: keyType})
 	*m = updated.(Model)
+	runPlayerCmds(t, m, cmd)
+}
+
+// runPlayerCmds drives the async plumbing a real bubbletea runtime drives
+// for us: it runs the command a keypress (or a catalog message) returned,
+// and applies the messages that change model state — player results and
+// catalog pages — then recurses on whatever they returned in turn. Ticks and
+// toast timers are run (they shrunk to ~1ms in TestMain) but never applied:
+// a real runtime applies them on its own schedule, and no test may depend on
+// a toast expiring.
+func runPlayerCmds(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case nil:
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if sub != nil {
+				runPlayerCmds(t, m, sub)
+			}
+		}
+	case playerMsg:
+		applyRun(t, m, msg)
+	case playlistsMsg, albumsMsg, itemsMsg, searchMsg, savedMsg:
+		applyRun(t, m, msg)
+	default:
+		// ticks and toasts: scheduled for real by bubbletea, dropped here
+	}
+}
+
+// applyRun feeds one state-carrying message into Update and drains what it
+// returned in turn (a player result may toast; a catalog page may play).
+func applyRun(t *testing.T, m *Model, msg tea.Msg) {
+	t.Helper()
+	updated, next := m.Update(msg)
+	*m = updated.(Model)
+	runPlayerCmds(t, m, next)
 }
 
 func lines(m *Model) []string { return strings.Split(m.View(), "\n") }

@@ -109,9 +109,16 @@ func (m Model) searchSpec() winSpec {
 		input:    m.filter,
 	}
 	if m.fetch == nil {
-		// Mock mode: the window filters the open list client-side.
+		// Mock mode: the window filters the open list client-side. The match
+		// count comes from the view's track list, not from composing the rows
+		// again — a window over the list must not make the model build the
+		// list twice per frame.
 		s.foot = "enter apply · esc cancel"
-		s.footR = fmt.Sprintf("%d matches", len(m.visibleRows()))
+		if m.section == SectionTracks {
+			s.footR = fmt.Sprintf("%d matches", len(m.tracksForView()))
+		} else {
+			s.footR = fmt.Sprintf("%d matches", len(m.visibleRows()))
+		}
 		return s
 	}
 	s.foot = "type ≥2 chars · enter results · esc close"
