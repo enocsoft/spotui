@@ -31,6 +31,11 @@ S19. Search, el palette de comandos, el selector de salida y la ayuda son **vent
 S20. El login de **playback** lo hace la librería: `session.InteractiveCredentials` ya implementa Authorization Code + PKCE con S256 sobre `http://127.0.0.1:<puerto>/login` con los scopes de streaming, y usa su propio client id — se obtiene dejando `ClientId` vacío (`librespot.ClientIdHex`), porque sólo el token de ese client trae el claim `username` que el access point exige. El PKCE propio (`internal/auth`) queda para la Web API (T7) y **no** sirve para reproducir: `session.SpotifyTokenCredentials` deriva en `ap.ConnectSpotifyToken` y el access point lo rechaza con `BadCredentials`.
 S21. La app **no puede inferir Premium**: `GET /v1/me` dejó de devolver `product` para apps nuevas en Development Mode (S14). Ningún mensaje debe afirmar la suscripción del usuario; se informa que el servidor rechazó la sesión y se listan causas posibles. (L21)
 
+S22. Shuffle: `s` alterna sobre la vista abierta. Encendido, **manda nuestro orden**: la lista se baraja conservando el tema que suena en su lugar, el cursor sigue a su track, `n`/`p` recorren el orden barajado y el drawer lo refleja; apagado, todo vuelve al orden y al comportamiento de la sesión. Sin persistencia entre reinicios. (L30)
+S23. Contenidos de playlist **y de álbum** se resuelven por el cliente interno (`ContextResolve` sobre `spotify:playlist:<id>` / `spotify:album:<id>`), no por la Web API: la API de 2026 responde 403 en items de playlists ajenas. Un solo camino, sin duplicar mapeo, conteo de omitidos ni aviso de lista acotada. (L29, L32)
+S24. Búsqueda: la ventana flotante es **sólo input**; escribir dispara la búsqueda con debounce (~250 ms, mínimo 2 caracteres, ticks y respuestas viejas descartados) y los resultados reemplazan la lista principal agrupados por tipo. `enter` cierra la ventana y deja el cursor en los resultados; `esc` cierra y vuelve. Accionar sobre un resultado nunca cambia la fila de secciones. (L31)
+S25. La fila de secciones tiene sólo `Tracks` y `Playlists`: los álbumes guardados viven dentro de la vista Playlists como grupo propio, y la cola es el drawer. (L31, L33)
+
 ## Tasks
 
 | ID | Qué | Specs | Ruta | Commit |
@@ -49,6 +54,15 @@ S21. La app **no puede inferir Premium**: `GET /v1/me` dejó de devolver `produc
 | T13 | `:play <spotify:track:ID>` en el palette para poder escuchar hoy, antes del catálogo real | S1, S16 | entregado | — |
 | T14 | README: declarar que es un cliente no oficial (S17) y que **CGO_ENABLED=0 no compila** | S17 | entregado | — |
 | T15 | PKCE propio: verifier/challenge S256, servidor local en `/login`, exchange de código, refresh y cache 0600 en el state dir; el token se pasa a la sesión con `SpotifyTokenCredentials` | S20, S21 | entregado | — |
+
+| T18 | Contenidos de playlist por el cliente interno (ContextResolve) | S23 | entregado | eeb0850 |
+| T19 | Búsqueda incremental: ventana sólo input, resultados en la lista | S24 | entregado | e310772 |
+| T20 | Quitar las celdas Search y Queue de la fila de secciones | S25 | entregado | e310772 |
+| T21 | Shuffle real con `s` y orden propio para `n`/`p` | S22 | entregado | d58726f |
+| T22 | Abrir álbumes desde la búsqueda por el resolver de contextos | S23 | entregado | 86245ec |
+| T23 | Álbumes guardados dentro de la vista Playlists (`GET /v1/me/albums` con paging) | S25 | en curso | — |
+| T24 | Búsqueda: resaltado del match y foco distinguible entre grupos | S24 | en curso | — |
+| T25 | `:play` acepta link/URI de playlist y de álbum, además de track | S24 | en curso | — |
 
 ## Log
 
@@ -117,3 +131,13 @@ L27 (disposición sobre el review nativo): a mitad de sesión, RDD avisó de un 
 L28 (hito final del motor, confirmado por el usuario): «si suena la musica con :play url». Reproducción real end-to-end: `:play` con un link de Spotify pegado tal cual saca audio por el sink local, sin abrir la app de Spotify y sin dispositivo remoto. Queda cerrado el objetivo original del proyecto; lo único que sigue siendo de ejemplo es la lista (T7).
 
 Recorrido completo, para no repetirlo (cada tramo costó una corrida fallida): implicit grant eliminado por Spotify (L21) → login propio PKCE con el client id del dashboard, que no sirve para el access point (L24) → login delegado a la librería con su propio client id, cuyo handler de callback consumía cualquier request (L26/T16) → callback propio con validación de `state` y tolerancia a requests sin `code` → credenciales de sesión por valor, y la sesión recibe `SpotifyTokenCredentials` construidas igual que en la rama interactiva de la librería. Verificación propia en cada paso: compilación, tests, y un callback falso para probar la cadena sin la cuenta del usuario.
+
+L29 (contenidos por el cliente interno): el 403 de la Web API en `/playlists/{id}/items` no era un bug nuestro, es la política de 2026 (sólo propias o colaborativas). ncspot mostraba esas playlists porque usa el cliente interno. Ahora los temas se resuelven con `ContextResolve` y la Web API queda para lista y búsqueda. Efectos en la UI: sin `added_at` (columna ADDED vacía en playlists) y totales posibles aproximados, informados como «showing N of T».
+
+L30 (shuffle, decisión del padre): la librería no expone shuffle y barajar sólo la vista habría desincronizado lo visible de lo que suena. Encendido, nuestro orden manda sobre `n`/`p`; apagado, vuelve al de la sesión. 10 tests, incluido el determinismo por semilla.
+
+L31 (búsqueda, corregida dos veces por el usuario): primero se implementó con resultados dentro de la ventana y luego con `enter` que navegaba a una sección Search; el usuario pidió lo contrario en ambos casos. Estado final: ventana sólo input, resultados en la lista, sin celdas Search/Queue. Lección de proceso: para cambios de interacción, confirmar el flujo completo antes de escribir, no después.
+
+L32 (álbumes): «porque no me deja abrir los albums» — no estaba implementado, no roto. Un álbum es otro contexto para el mismo resolver, así que extender fue cambiar la firma de id a URI; sin año en la franja porque ni la búsqueda ni el resolver lo traen.
+
+L33 (cierre de superficie, pedido del usuario «termina el todo»): en curso T23 (álbumes guardados como grupo en Playlists), T24 (resaltado del match y foco entre grupos) y T25 (`:play` con link de playlist/álbum). Después: review nativo sobre el candidato final commiteado y README actualizado con los dos logins.
