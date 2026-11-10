@@ -51,10 +51,16 @@ func (m *Model) onRadio() tea.Cmd {
 // (radioFiredID) fires the boundary at most once per track; the next track
 // starts its own. Without the injectable resolver there is nothing to fire.
 func (m *Model) radioCheck() tea.Cmd {
-	if !m.radioOn || m.autoplay == nil {
+	if !m.radioOn {
+		return nil
+	}
+	if m.autoplay == nil {
+		debugf("radio: no autoplay resolver wired")
 		return nil
 	}
 	s := m.data.Session()
+	debugf("radio tick: state=%v track=%q elapsed=%v total=%v latch=%q",
+		s.State, s.TrackID, s.Elapsed, s.Total, m.radioFiredID)
 	if s.TrackID == "" || (s.State != library.StatePlaying && s.State != library.StatePaused) {
 		return nil
 	}
@@ -69,6 +75,7 @@ func (m *Model) radioCheck() tea.Cmd {
 		return nil // this track's boundary already fired
 	}
 	m.radioFiredID = s.TrackID
+	debugf("radio: boundary FIRE for %q", s.TrackID)
 	return m.radioResolveCmd(s.TrackID)
 }
 
