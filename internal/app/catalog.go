@@ -38,6 +38,14 @@ type playlistsMsg struct {
 	err    error
 }
 
+// albumsMsg carries one page of GET /v1/me/albums (or its error): the
+// second group of the Playlists view (T23).
+type albumsMsg struct {
+	offset int
+	page   library.AlbumPage
+	err    error
+}
+
 // itemsMsg carries one slice of the playlist's resolved contents (or its
 // error). The contents ride the playback resolver (library/context.go).
 type itemsMsg struct {
@@ -70,6 +78,16 @@ func (m Model) playlistsCmd(offset int) tea.Cmd {
 	return func() tea.Msg {
 		page, err := f.Playlists(context.Background(), offset)
 		return playlistsMsg{offset: offset, page: page, err: err}
+	}
+}
+
+// albumsCmd fetches one page of saved albums (T23) the same way the
+// playlists command does: blocking call inside a tea.Cmd goroutine.
+func (m Model) albumsCmd(offset int) tea.Cmd {
+	f := m.fetch
+	return func() tea.Msg {
+		page, err := f.SavedAlbums(context.Background(), offset)
+		return albumsMsg{offset: offset, page: page, err: err}
 	}
 }
 
@@ -131,14 +149,36 @@ func (m *Model) applyPlaylists(msg playlistsMsg) {
 	m.clampCursor()
 }
 
-func (m *Model) applyItems(msg itemsMsg) {
+func (m *Model) applyAlbums(msg albumsMsg) {
+	if msg.offset != m.albumsPending {
+		return // a stale page (another retry won the race): drop it
+	}
+	m.albumsPending, m.albumsLoading = -1, false
+	if msg.err != nil {
+		m.albumsErr = msg.err
+		return
+	}
+	m.albumsErr = nil
+	m.albumsLoaded = true
+	if msg.offset == 0 {
+		m.albums = msg.page.Albums
+	} else {
+		m.albums = append(m.albums, msg.page.Albums...)
+	}
+	m.albumsTotal = msg.page.Total
+	m.albumsNext = msg.page.NextOffset
+	m.clampCursor()
+}
+
+func (m *Model) applyItems(msg itemsMsg) tea.Cmd {
 	if msg.plID != m.plID || msg.offset != m.iPending {
-		return // stale: the user moved to another playlist meanwhile
+		return nil // stale: the user moved to another playlist meanwhile
 	}
 	m.iPending, m.plItemsLoading = -1, false
 	if msg.err != nil {
 		m.plItemsErr = msg.err
-		return
+		// playOnLoad survives: `r` retry completes the play intent (T25)
+		return nil
 	}
 	m.plItemsErr = nil
 	m.plTracks = append(m.plTracks, msg.page.Tracks...)
@@ -146,8 +186,34 @@ func (m *Model) applyItems(msg itemsMsg) {
 	m.plNext = msg.page.NextOffset
 	// What the bounded resolver could not show — footnoted, never silent.
 	m.plSkipped, m.plTruncated = msg.page.Skipped, msg.page.Truncated
+	// A context opened by id (:play, T25) has no summary to name it: take the
+	// resolve's own display name when it carries one, else the honest kind+id
+	// label — never an invented title.
+	if m.plName == "" {
+		switch {
+		case msg.page.Name != "":
+			m.plName = msg.page.Name
+		case m.plIsAlbum:
+			m.plName = "album " + m.plID
+		default:
+			m.plName = "playlist " + m.plID
+		}
+	}
 	m.rebuildShuffle() // new playable rows landed: re-permute over them
 	m.clampCursor()
+	pending := m.playOnLoad
+	m.playOnLoad = false
+	if pending && msg.offset == 0 {
+		if len(m.plTracks) == 0 {
+			return m.setToast("✗ nothing playable in " + m.plName)
+		}
+		first := m.plTracks[0]
+		if err := m.player.Play(first); err != nil {
+			return m.setToast("✗ " + err.Error())
+		}
+		return m.setToast("▶ " + first.Title)
+	}
+	return nil
 }
 
 func (m *Model) applySearch(msg searchMsg) {
@@ -254,15 +320,37 @@ func (m *Model) ensureMoreSearch() tea.Cmd {
 }
 
 func (m *Model) ensureMorePlaylists() tea.Cmd {
-	if m.plsLoading || m.plsNext < 0 || m.plsErr != nil {
-		return nil
-	}
 	rows := m.visibleRows()
 	if m.cursor != len(rows)-1 {
 		return nil
 	}
-	m.plsLoading, m.plsPending = true, m.plsNext
-	return m.playlistsCmd(m.plsNext)
+	// The group the last row belongs to owns the next page (T23): album rows
+	// page the saved albums, everything else the playlists. A trailing status
+	// row belongs to the group whose items sit right above it.
+	group := rows[len(rows)-1].kind
+	if group == rowStatus && len(rows) >= 2 {
+		group = rows[len(rows)-2].kind
+	}
+	if group == rowHeader && !m.expanded["ALBUMS"] {
+		// a collapsed ALBUMS header never interrupts the playlists paging:
+		// reaching it means the playlist list ended for now
+		group = rowPlaylistItem
+	}
+	switch group {
+	case rowAlbumItem:
+		if m.albumsLoading || m.albumsNext < 0 || m.albumsErr != nil {
+			return nil
+		}
+		m.albumsLoading, m.albumsPending = true, m.albumsNext
+		return m.albumsCmd(m.albumsNext)
+	case rowPlaylistItem:
+		if m.plsLoading || m.plsNext < 0 || m.plsErr != nil {
+			return nil
+		}
+		m.plsLoading, m.plsPending = true, m.plsNext
+		return m.playlistsCmd(m.plsNext)
+	}
+	return nil
 }
 
 func (m *Model) ensureMoreItems() tea.Cmd {
@@ -287,6 +375,17 @@ func (m *Model) ensurePlaylistsLoaded() tea.Cmd {
 	return m.playlistsCmd(0)
 }
 
+// ensureAlbumsLoaded fires the saved-albums first page once (T23): the
+// group fetches when it is expanded, not on session start — the playlists
+// behaviour, one group later.
+func (m *Model) ensureAlbumsLoaded() tea.Cmd {
+	if m.fetch == nil || m.albumsLoaded || m.albumsLoading {
+		return nil
+	}
+	m.albumsLoading, m.albumsPending = true, 0
+	return m.albumsCmd(0)
+}
+
 // --- actions on the real catalog ---
 
 // openPlaylist drills into a real playlist. Cached contents are kept: re-entering
@@ -296,6 +395,7 @@ func (m *Model) openPlaylist(s library.PlaylistSummary) tea.Cmd {
 	m.section = SectionTracks
 	m.sView = false
 	m.cursor, m.listOffset = 0, 0
+	m.playOnLoad = false
 	if m.plID == s.ID && !m.plIsAlbum && (len(m.plTracks) > 0 || m.plItemsErr != nil || m.plSkipped > 0) {
 		return nil
 	}
@@ -323,6 +423,7 @@ func (m *Model) openAlbum(a library.AlbumSummary) tea.Cmd {
 	m.section = SectionTracks
 	m.sView = false
 	m.cursor, m.listOffset = 0, 0
+	m.playOnLoad = false
 	if m.plID == a.ID && m.plIsAlbum && (len(m.plTracks) > 0 || m.plItemsErr != nil || m.plSkipped > 0) {
 		return nil
 	}
@@ -348,8 +449,31 @@ func (m *Model) startSearch(query string) tea.Cmd {
 	m.sTracks, m.sAlbums, m.sPlaylists = nil, nil, nil
 	m.sView = true
 	m.cursor, m.listOffset = 0, 0
-	m.rebuildShuffle() // the view changed: the old permutation is void
+	m.playOnLoad = false // the results view replaces the pending play intent
+	m.rebuildShuffle()   // the view changed: the old permutation is void
 	return m.searchCmd(0)
+}
+
+// playContext loads a playlist or album context by id (:play with a context
+// target, T25) into the Tracks view and plays its first playable track once
+// the resolver answers. The strip names the context from the resolve's own
+// metadata (library.ItemsPage.Name) or the kind+id label when it carries
+// none; a failed resolve keeps the intent for `r` retry.
+func (m *Model) playContext(kind, id string) tea.Cmd {
+	m.section = SectionTracks
+	m.sView = false
+	m.cursor, m.listOffset = 0, 0
+	m.plID = id
+	m.plIsAlbum = kind == library.TargetAlbum
+	m.plName, m.plOwner, m.plArtist = "", "", ""
+	m.plPrivate, m.plCollab = false, false
+	m.plTracks, m.plItemsErr = nil, nil
+	m.plTotal, m.plNext = 0, -1
+	m.plSkipped, m.plTruncated = 0, false
+	m.plItemsLoading, m.iPending = true, 0
+	m.playOnLoad = true
+	m.rebuildShuffle() // the view changed: the old permutation is void
+	return m.itemsCmd(id, 0)
 }
 
 // onDebounceTick is the ~250 ms timer of the search window: only the newest
@@ -408,7 +532,11 @@ func (m Model) realRows() []row {
 }
 
 func (m Model) playlistsRows() []row {
-	rows := []row{{kind: rowHeader, text: theme.GlyphExpanded + " PLAYLISTS", count: m.plsTotal}}
+	glyph := theme.GlyphExpanded
+	if !m.expanded["PLAYLISTS"] {
+		glyph = theme.GlyphCollapsed
+	}
+	rows := []row{{kind: rowHeader, text: glyph + " PLAYLISTS", count: m.plsTotal}}
 	if !m.expanded["PLAYLISTS"] {
 		return rows
 	}
@@ -428,7 +556,48 @@ func (m Model) playlistsRows() []row {
 	if m.plsLoading && len(m.pls) > 0 {
 		rows = append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading more…"})
 	}
+	// T23: the saved albums are the second group of the same view — the
+	// section row stays Tracks │ Playlists (S18), the albums live here.
+	aglyph := theme.GlyphCollapsed
+	if m.expanded["ALBUMS"] {
+		aglyph = theme.GlyphExpanded
+	}
+	rows = append(rows, row{kind: rowHeader, text: aglyph + " ALBUMS", count: m.albumsTotal})
+	if !m.expanded["ALBUMS"] {
+		return rows
+	}
+	if len(m.albums) == 0 && !m.albumsLoading {
+		if m.albumsErr != nil {
+			rows = append(rows, m.errorStatusRow(m.albumsErr))
+		} else {
+			rows = append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " no saved albums"})
+		}
+	}
+	for _, a := range m.albums {
+		rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: albumMeta(a), al: a})
+	}
+	if m.albumsErr != nil && len(m.albums) > 0 {
+		rows = append(rows, m.errorStatusRow(m.albumsErr))
+	}
+	if m.albumsLoading && len(m.albums) > 0 {
+		rows = append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading more…"})
+	}
 	return rows
+}
+
+// albumMeta is the right-aligned album row meta: artist · year · count.
+// Only the facts the summary carries render: a search summary has neither
+// year nor count, so its meta stays the artist alone — the same string it
+// always rendered.
+func albumMeta(a library.AlbumSummary) string {
+	parts := []string{a.Artist}
+	if a.Year != "" {
+		parts = append(parts, a.Year)
+	}
+	if a.TrackCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d", a.TrackCount))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // errorStatusRow renders the DESIGN error state (`✗ could not load · r retry`),
@@ -527,21 +696,21 @@ func (m Model) searchResultRows() []row {
 		}
 	}
 	if len(m.sTracks) > 0 {
-		rows = append(rows, row{kind: rowHeader, text: "TRACKS", count: len(m.sTracks)})
+		rows = append(rows, row{kind: rowHeader, text: theme.GlyphExpanded + " TRACKS", count: len(m.sTracks)})
 		for i, t := range m.orderedTracks() {
-			rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)})
+			rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID), match: m.sQuery})
 		}
 	}
 	if len(m.sAlbums) > 0 {
-		rows = append(rows, row{kind: rowHeader, text: "ALBUMS", count: len(m.sAlbums)})
+		rows = append(rows, row{kind: rowHeader, text: theme.GlyphExpanded + " ALBUMS", count: len(m.sAlbums)})
 		for _, a := range m.sAlbums {
-			rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: a.Artist, al: a})
+			rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: albumMeta(a), al: a, match: m.sQuery})
 		}
 	}
 	if len(m.sPlaylists) > 0 {
-		rows = append(rows, row{kind: rowHeader, text: "PLAYLISTS", count: len(m.sPlaylists)})
+		rows = append(rows, row{kind: rowHeader, text: theme.GlyphExpanded + " PLAYLISTS", count: len(m.sPlaylists)})
 		for _, p := range m.sPlaylists {
-			rows = append(rows, row{kind: rowPlaylistItem, text: p.Name, meta: playlistMeta(p), pl: p})
+			rows = append(rows, row{kind: rowPlaylistItem, text: p.Name, meta: playlistMeta(p), pl: p, match: m.sQuery})
 		}
 	}
 	if m.sLoading && loaded > 0 {

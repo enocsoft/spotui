@@ -37,6 +37,9 @@ type row struct {
 	st   statusKind
 	pl   library.PlaylistSummary
 	al   library.AlbumSummary // real catalog rows (T22): album rows carry their summary so `enter` can drill into them
+	// match is the query whose case-insensitive match inside the row's label
+	// renders bold (T24, search results only; empty means no highlighting).
+	match string
 }
 
 // currentTrack resolves the now-playing track. The real player reports the
@@ -161,6 +164,11 @@ func (m *Model) onEnter() tea.Cmd {
 			m.rebuildShuffle()
 			return nil
 		}
+		if r.kind == rowAlbumItem && m.fetch != nil {
+			// T23: a saved album opens like a search album — the resolver
+			// serves spotify:album:<id> with no owner restriction.
+			return m.openAlbum(r.al)
+		}
 		if r.kind == rowHeader {
 			return m.onToggle()
 		}
@@ -251,6 +259,17 @@ func (m *Model) onToggle() tea.Cmd {
 		name = strings.TrimPrefix(name, theme.GlyphCollapsed+" ")
 		if name == "PLAYLISTS" {
 			m.expanded["PLAYLISTS"] = !m.expanded["PLAYLISTS"]
+			m.clampCursor()
+			return nil
+		}
+		if name == "ALBUMS" && m.fetch != nil {
+			// T23: expanding the saved-albums group fetches its first page
+			// lazily; collapsing is local.
+			m.expanded["ALBUMS"] = !m.expanded["ALBUMS"]
+			m.clampCursor()
+			if m.expanded["ALBUMS"] {
+				return m.ensureAlbumsLoaded()
+			}
 			return nil
 		}
 		return m.setToast("l · " + name + " is empty in slice 1")
@@ -328,7 +347,7 @@ func (m *Model) onPickSink() tea.Cmd {
 func (m *Model) execCommand() tea.Cmd {
 	raw := strings.TrimSpace(m.cmdInput)
 	if raw == "" {
-		return m.setToast(": type a command · :play <spotify track uri or id>")
+		return m.setToast(": type a command · :play <track, playlist or album link or uri>")
 	}
 	name, rest := raw, ""
 	if i := strings.IndexAny(raw, " \t"); i >= 0 {
@@ -336,14 +355,23 @@ func (m *Model) execCommand() tea.Cmd {
 	}
 	switch name {
 	case "play", ":play":
-		id, err := library.ParseTrackID(rest)
+		tgt, err := library.ParseTarget(rest)
 		if err != nil {
-			return m.setToast("✗ :play wants a track id, spotify:track:<id> or a pasted open.spotify.com link")
+			return m.setToast("✗ :play wants a track, playlist or album — spotify:track:<id>, spotify:playlist:<id>, spotify:album:<id> or a pasted open.spotify.com link")
 		}
-		if err := m.player.Play(library.Track{ID: id}); err != nil {
-			return m.setToast("✗ " + err.Error())
+		if tgt.Kind == library.TargetTrack {
+			// unchanged track path (T25): the id plays exactly as before
+			if err := m.player.Play(library.Track{ID: tgt.ID}); err != nil {
+				return m.setToast("✗ " + err.Error())
+			}
+			return m.setToast("▶ " + tgt.ID)
 		}
-		return m.setToast("▶ " + id)
+		if m.fetch == nil {
+			return m.setToast("✗ :play playlist and album targets need the real catalog — mock mode has no resolver")
+		}
+		// A context target: resolve it, load its tracks into the list view and
+		// play the first playable track (T25).
+		return m.playContext(tgt.Kind, tgt.ID)
 	}
 	return m.setToast(": unknown command " + name)
 }

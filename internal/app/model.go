@@ -107,6 +107,18 @@ type Model struct {
 	plsTotal   int
 	plsNext    int // offset of the next page, -1 when exhausted
 
+	// Saved albums panel (T23): the ALBUMS group of the Playlists view, one
+	// lazily fetched page of GET /v1/me/albums after another — the same
+	// paging contract as the playlists panel above. The group stays collapsed
+	// (and fetches nothing) until it is expanded.
+	albumsLoaded  bool // a page applied at least once — no auto-refetch after it
+	albumsLoading bool
+	albumsErr     error
+	albumsPending int // offset of the in-flight page, -1 when none
+	albums        []library.AlbumSummary
+	albumsTotal   int
+	albumsNext    int // offset of the next page, -1 when exhausted
+
 	// Focused playlist/album contents (drill-down), resolved through the playback
 	// resolver (library/context.go). plSkipped/plTruncated carry what the
 	// bounded resolver could not show, footnoted under the list — never a
@@ -125,6 +137,11 @@ type Model struct {
 	plItemsLoading        bool
 	plItemsErr            error
 	iPending              int
+	// playOnLoad (T25): :play with a context target — the first playable
+	// track of the freshly loaded list plays once the resolver answers. It
+	// survives a failed resolve (`r` retry completes the intent) and is
+	// cleared by every other view change.
+	playOnLoad bool
 
 	// Search (T19): the floating window (`/`) is input only — prompt and one
 	// hint line, never result rows. Typing arms the 250 ms debounce; when the
@@ -274,9 +291,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyPlaylists(msg)
 		return m, nil
 
-	case itemsMsg:
-		m.applyItems(msg)
+	case albumsMsg:
+		m.applyAlbums(msg)
 		return m, nil
+
+	case itemsMsg:
+		return m, m.applyItems(msg)
 
 	case searchMsg:
 		m.applySearch(msg)

@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/nahuel/spotify-tui/internal/config"
 	"github.com/nahuel/spotify-tui/internal/library"
@@ -30,6 +32,7 @@ const (
 // stubFetch records every catalog call and serves canned pages/errors.
 type stubFetch struct {
 	playlistsFn  func(offset int) (library.PlaylistPage, error)
+	albumsFn     func(offset int) (library.AlbumPage, error)
 	itemsFn      func(id string, offset int) (library.ItemsPage, error)
 	albumItemsFn func(id string, offset int) (library.ItemsPage, error)
 	searchFn     func(query string, offset int) (library.SearchPage, error)
@@ -40,6 +43,11 @@ type stubFetch struct {
 func (f *stubFetch) Playlists(ctx context.Context, offset int) (library.PlaylistPage, error) {
 	f.calls = append(f.calls, fmt.Sprintf("playlists %d", offset))
 	return f.playlistsFn(offset)
+}
+
+func (f *stubFetch) SavedAlbums(ctx context.Context, offset int) (library.AlbumPage, error) {
+	f.calls = append(f.calls, fmt.Sprintf("albums %d", offset))
+	return f.albumsFn(offset)
 }
 
 func (f *stubFetch) Items(ctx context.Context, id string, offset int) (library.ItemsPage, error) {
@@ -126,6 +134,9 @@ func applyCatalogMsg(t *testing.T, m *Model, msg tea.Msg) {
 			runCatalogCmd(t, m, c)
 		}
 	case playlistsMsg:
+		updated, _ := m.Update(msg)
+		*m = updated.(Model)
+	case albumsMsg:
 		updated, _ := m.Update(msg)
 		*m = updated.(Model)
 	case itemsMsg:
@@ -447,6 +458,284 @@ func TestCatalogSavedToggleRevertsOnFailureWithToast(t *testing.T) {
 	}
 	if strings.Contains(got, "[x]") {
 		t.Errorf("the cell must not show [x] after a failed save:\n%s", got)
+	}
+}
+
+// --- T23: saved albums as a browsable section ---
+
+// savedAlbumFixtures serves one playlist and two saved-album pages (55
+// total, 50 per page — the same lazy paging playlists follow), plus album
+// contents through the resolver path.
+func savedAlbumFixtures(f *stubFetch) {
+	f.playlistsFn = func(offset int) (library.PlaylistPage, error) {
+		if offset != 0 {
+			return library.PlaylistPage{}, errors.New("unexpected offset — no prefetch")
+		}
+		return library.PlaylistPage{
+			Playlists: []library.PlaylistSummary{{ID: "pl1", Name: "Mine", Owner: "nahuel", Private: true, TrackCount: 1}},
+			Total:     1, NextOffset: -1,
+		}, nil
+	}
+	f.albumsFn = func(offset int) (library.AlbumPage, error) {
+		switch offset {
+		case 0:
+			return library.AlbumPage{Albums: []library.AlbumSummary{
+				{ID: "al1", Name: "Kind of Blue", Artist: "Miles Davis", Year: "1959", TrackCount: 5},
+			}, Total: 2, Offset: 0, NextOffset: 50}, nil
+		case 50:
+			return library.AlbumPage{Albums: []library.AlbumSummary{
+				{ID: "al2", Name: "Maiden Voyage", Artist: "Herbie Hancock", Year: "1965", TrackCount: 5},
+			}, Total: 2, Offset: 50, NextOffset: -1}, nil
+		default:
+			return library.AlbumPage{}, errors.New("unexpected offset — the catalog must never prefetch")
+		}
+	}
+	f.albumItemsFn = func(id string, offset int) (library.ItemsPage, error) {
+		if id != "al1" && id != "al2" {
+			return library.ItemsPage{}, errors.New("unexpected album items request")
+		}
+		return library.ItemsPage{Tracks: []library.Track{
+			{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+		}, Total: 1, NextOffset: -1}, nil
+	}
+}
+
+// The library root renders the second ALBUMS group under PLAYLISTS, the
+// group stays collapsed (and fetches nothing) until it is expanded, and
+// expansion fetches the first page lazily — exactly the playlists behaviour.
+func TestSavedAlbumsSectionRendersAndPagesLazily(t *testing.T) {
+	f := &stubFetch{}
+	savedAlbumFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	loadPlaylistsReady(t, m)
+
+	rows := m.visibleRows()
+	if rows[0].kind != rowHeader || !strings.Contains(rows[0].text, "PLAYLISTS") {
+		t.Fatalf("the library root starts with the playlists group, rows = %+v", rows)
+	}
+	last := rows[len(rows)-1]
+	if last.kind != rowHeader || !strings.Contains(last.text, "ALBUMS") {
+		t.Fatalf("the library root ends with the ALBUMS group header, rows = %+v", rows)
+	}
+	if got := strings.Join(f.calls, ","); strings.Contains(got, "albums") {
+		t.Fatalf("a collapsed ALBUMS group must not fetch, made [%s]", got)
+	}
+
+	// expanding the group fetches exactly the first page
+	m.cursor = len(m.visibleRows()) - 1
+	pressRun(t, m, "l")
+	if got := strings.Join(f.calls, ","); got != "playlists 0,albums 0" {
+		t.Fatalf("expanding ALBUMS must fetch the first page lazily, made [%s]", got)
+	}
+	got := stripANSI(m.View())
+	if !strings.Contains(got, "Kind of Blue") {
+		t.Errorf("the albums group should list its albums, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Miles Davis · 1959 · 5") {
+		t.Errorf("an album row shows artist · year · track count, got:\n%s", got)
+	}
+
+	// the second page loads only when the cursor reaches the last row
+	pressRun(t, m, "G")
+	if got := strings.Join(f.calls, ","); got != "playlists 0,albums 0,albums 50" {
+		t.Fatalf("after scrolling to the end the catalog made [%s], want one lazy follow-up albums page", got)
+	}
+	if !strings.Contains(m.View(), "Maiden Voyage") {
+		t.Errorf("the followed page should render its album, got:\n%s", m.View())
+	}
+	if got := stripANSI(lines(m)[0]); strings.Contains(got, "Albums") {
+		t.Errorf("albums live inside the Playlists view: the section row must never grow an Albums cell, got %q", got)
+	}
+
+	// width discipline holds with the albums group expanded too
+	for _, size := range [][2]int{{180, 50}, {140, 40}, {80, 24}} {
+		w, h := size[0], size[1]
+		wm, _ := newRealModel(t, w, h, f)
+		loadPlaylistsReady(t, wm)
+		wm.cursor = len(wm.visibleRows()) - 1
+		pressRun(t, wm, "l")
+		for i, line := range lines(wm) {
+			if lw := visibleWidth(line); lw > w {
+				t.Errorf("w=%d: album row %d is %d columns wide: %q", w, i, lw, stripANSI(line))
+			}
+		}
+		if n := len(lines(wm)); n != h {
+			t.Errorf("w=%d: rendered %d lines, want %d", w, n, h)
+		}
+	}
+}
+
+// enter on a saved album opens its tracks through the existing album
+// resolver path (spotify:album:<id>) — the same path search albums use —
+// and a row of the open album plays.
+func TestSavedAlbumOpensItsTracksAndPlays(t *testing.T) {
+	f := &stubFetch{}
+	savedAlbumFixtures(f)
+	m, pl := newRealModel(t, 180, 50, f)
+	loadPlaylistsReady(t, m)
+
+	m.cursor = len(m.visibleRows()) - 1
+	pressRun(t, m, "l") // expand albums, first page lands
+	pressRun(t, m, "j") // onto the album row
+	pressRun(t, m, "enter")
+
+	if m.section != SectionTracks || m.sView {
+		t.Fatalf("enter on a saved album must open its tracks on the Tracks view, section=%v sView=%v", m.section, m.sView)
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "So What") {
+		t.Errorf("the open album must render its tracks, got:\n%s", got)
+	}
+	joined := strings.Join(f.calls, ",")
+	if !strings.Contains(joined, "albumItems al1 0") {
+		t.Errorf("a saved album must open through the album resolver path, made [%s]", joined)
+	}
+	if strings.Contains(joined, "items al1") {
+		t.Errorf("the playlist items path must not fire for an album, made [%s]", joined)
+	}
+
+	pressRun(t, m, "enter")
+	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
+		t.Errorf("enter on an album track must play it, played %+v", pl.played)
+	}
+}
+
+// --- T24: search results presentation ---
+
+// withTrueColor pins the renderer's color profile for one test: without a
+// TTY lipgloss renders with no ANSI at all, so style-level assertions (the
+// bold match, the focused band) would be vacuous. The profile is restored
+// so every other test keeps its detected behaviour.
+func withTrueColor(t *testing.T) {
+	t.Helper()
+	prev := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+}
+
+// listRegionLines is the full-screen list's own slice of the frame: the
+// listBody rows, below the top bar, its rule and the context strip's rule.
+func listRegionLines(m *Model) []string {
+	ls := lines(m)
+	h := m.listHeight()
+	if 4+h > len(ls) {
+		h = len(ls) - 4
+	}
+	return ls[4 : 4+h]
+}
+
+// bandedRows counts the lines carrying a truecolor background band (the
+// focused row's surface tint): exactly one focused row, wherever the cursor
+// stands.
+func bandedRows(ls []string) int {
+	n := 0
+	for _, l := range ls {
+		if strings.Contains(l, "\x1b[48;2;") {
+			n++
+		}
+	}
+	return n
+}
+
+// The matched substring of every result label is bold; the rest of the label
+// keeps the plain value role — bold is a weight, not a new colour.
+func TestSearchMatchIsBoldAndTheRestIsNot(t *testing.T) {
+	withTrueColor(t)
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "blue")
+	pressKey(t, m, tea.KeyEnter) // close the window on the results
+
+	// rows: 0 TRACKS header, 1 So What, 2 Blue in Green, 3 ALBUMS header,
+	// 4 Kind of Blue, 5 PLAYLISTS header, 6 Bebop Essentials
+	if len(m.visibleRows()) != 7 {
+		t.Fatalf("setup rows = %d, want 7", len(m.visibleRows()))
+	}
+	ls := listRegionLines(m)
+
+	track := ls[2]
+	if !strings.Contains(track, matchedStyle.Render("Blue")) {
+		t.Errorf("the matched substring of the track label must be bold, got %q", track)
+	}
+	if !strings.Contains(track, theme.ValueStyle.Render(" in Green")) {
+		t.Errorf("the unmatched rest of the label must keep the value role, got %q", track)
+	}
+	if strings.Contains(track, theme.ValueStyle.Render("Blue")) {
+		t.Errorf("the matched substring must not render in the plain value style: %q", track)
+	}
+	if strings.Count(track, matchedStyle.Render("Blue")) != 1 {
+		t.Errorf("exactly one bold span per label, got %q", track)
+	}
+
+	// case-insensitive: the query in any casing bolds the label's own casing
+	press(t, m, "/")
+	typeSearch(t, m, "BLUE")
+	pressKey(t, m, tea.KeyEnter)
+	ls = listRegionLines(m)
+	if !strings.Contains(ls[2], matchedStyle.Render("Blue")) {
+		t.Errorf("a BLUE query must bold the row's own 'Blue', got %q", ls[2])
+	}
+
+	// album and playlist labels bold too; non-matching labels stay plain
+	press(t, m, "/")
+	typeSearch(t, m, "blue")
+	pressKey(t, m, tea.KeyEnter)
+	ls = listRegionLines(m)
+	if !strings.Contains(ls[4], matchedStyle.Render("Blue")) {
+		t.Errorf("the album label's matched substring must be bold, got %q", ls[4])
+	}
+	if strings.Contains(ls[1], matchedStyle.Render("So What")) {
+		t.Errorf("a non-matching label must not render bold: %q", ls[1])
+	}
+	if strings.Contains(ls[6], matchedStyle.Render("Bebop")) {
+		t.Errorf("a non-matching playlist label must not render bold: %q", ls[6])
+	}
+}
+
+// Group headers sit in a visibly different role from the result rows, the
+// cursor stays exactly one focused row, and the cursor moving between
+// groups is obvious without colour alone: the header's glyph flips to the
+// selected cue while it is focused.
+func TestSearchGroupHeadersDifferFromRowsAndCursorGlyph(t *testing.T) {
+	withTrueColor(t)
+	f := &stubFetch{}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "blue")
+	pressKey(t, m, tea.KeyEnter)
+
+	rows := m.visibleRows()
+	if !strings.Contains(rows[0].text, theme.GlyphExpanded+" TRACKS") {
+		t.Errorf("the group header carries the expanded glyph and its name, got %q", rows[0].text)
+	}
+	ls := listRegionLines(m)
+	if !strings.Contains(ls[3], theme.LabelStyle.Render(" \u25be ALBUMS")) {
+		t.Errorf("the ALBUMS header renders in the muted label role, got %q", stripANSI(ls[3]))
+	}
+
+	// exactly one focused row, and the focused header's glyph is the selected cue
+	if n := bandedRows(ls); n != 1 {
+		t.Fatalf("exactly one focused row, got %d:\n%s", n, strings.Join(ls, "\n"))
+	}
+	if !strings.Contains(stripANSI(ls[0]), theme.GlyphSelected+" TRACKS") {
+		t.Errorf("the focused TRACKS header must carry the selected glyph, got %q", stripANSI(ls[0]))
+	}
+
+	// moving to the ALBUMS header moves the glyph cue with the cursor
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	ls = listRegionLines(m)
+	if !strings.Contains(stripANSI(ls[3]), theme.GlyphSelected+" ALBUMS") {
+		t.Errorf("the focused ALBUMS header must carry the selected glyph, got %q", stripANSI(ls[3]))
+	}
+	if !strings.Contains(stripANSI(ls[0]), theme.GlyphExpanded+" TRACKS") {
+		t.Errorf("the unfocused TRACKS header reads expanded again, got %q", stripANSI(ls[0]))
+	}
+	if n := bandedRows(ls); n != 1 {
+		t.Errorf("exactly one focused row after moving between groups, got %d", n)
 	}
 }
 

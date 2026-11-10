@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/nahuel/spotify-tui/internal/library"
 	"github.com/nahuel/spotify-tui/internal/ui/theme"
 )
@@ -55,6 +57,13 @@ func padLeft(s string, w int) string {
 }
 
 func rule(w int) string { return theme.RuleStyle.Render(strings.Repeat(theme.GlyphRule, w)) }
+
+// matchedStyle is the matched substring of a result label (T24, DESIGN §7
+// search: "the matched substring bold"): the value role's colour at bold
+// weight — a weight, never a new colour, and no new theme token. It is
+// composed from the theme roles here, the way the floating-window styles
+// are.
+var matchedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Text2)
 
 // tableCols distributes the terminal width over the track-table columns.
 // ≥140: every column (DESIGN breakpoint table); 100–139: ADDED dropped;
@@ -487,7 +496,7 @@ func (m Model) trackLine(c tableCols, r row, selected bool) string {
 	}
 	styled := " " + strings.Join([]string{
 		theme.NumberStyle.Render(padLeft(num, c.num)),
-		theme.ValueStyle.Render(padRight(truncate(r.track.Title, c.title), c.title)),
+		m.trackTitleCell(r, c),
 		theme.ValueStyle.Render(padRight(truncate(r.track.Artist, c.artist), c.artist)),
 		theme.ValueStyle.Render(padRight(truncate(r.track.Album, c.album), c.album)),
 		theme.LabelStyle.Render(padRight(savedGlyph(r.track.Saved), c.saved)),
@@ -498,7 +507,7 @@ func (m Model) trackLine(c tableCols, r row, selected bool) string {
 		i := len(cells) - 1
 		styled = " " + strings.Join(append([]string{
 			theme.NumberStyle.Render(padLeft(num, c.num)),
-			theme.ValueStyle.Render(padRight(truncate(r.track.Title, c.title), c.title)),
+			m.trackTitleCell(r, c),
 			theme.ValueStyle.Render(padRight(truncate(r.track.Artist, c.artist), c.artist)),
 			theme.ValueStyle.Render(padRight(truncate(r.track.Album, c.album), c.album)),
 			theme.LabelStyle.Render(padRight(savedGlyph(r.track.Saved), c.saved)),
@@ -525,11 +534,65 @@ func tableHeader(c tableCols) string {
 	return " " + theme.LabelStyle.Render(strings.Join(cells, " "))
 }
 
+// trackTitleCell is the TITLE cell of a track row: the value role, with the
+// search query's case-insensitive matched substring bold (T24). Selected and
+// playing rows render plain: their whole-row roles already read as focus and
+// live, and no styled segment may sit inside their surface/rail bands.
+func (m Model) trackTitleCell(r row, c tableCols) string {
+	title := truncate(r.track.Title, c.title)
+	if r.match != "" {
+		return padRight(highlightMatch(title, r.match), c.title)
+	}
+	return theme.ValueStyle.Render(padRight(title, c.title))
+}
+
 func savedGlyph(saved bool) string {
 	if saved {
 		return theme.GlyphSaved
 	}
 	return theme.GlyphNotSaved
+}
+
+// highlightMatch renders a label with its case-insensitive matched
+// substring bold (T24): the match takes the bold weight of the value role's
+// own colour (theme.MatchedStyle — a weight, never a new colour); every
+// other byte keeps the plain value style. Each segment is styled on its
+// own, so no nested reset can leak. No match, no query: the label renders
+// plain, byte-identical to the unhighlighted path.
+func highlightMatch(text, query string) string {
+	if query == "" {
+		return theme.ValueStyle.Render(text)
+	}
+	lower := []rune(strings.ToLower(text))
+	want := []rune(strings.ToLower(query))
+	start := -1
+	for i := 0; i+len(want) <= len(lower); i++ {
+		ok := true
+		for j := range want {
+			if lower[i+j] != want[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return theme.ValueStyle.Render(text)
+	}
+	runes := []rune(text)
+	end := start + len(want)
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(theme.ValueStyle.Render(string(runes[:start])))
+	}
+	b.WriteString(matchedStyle.Render(string(runes[start:end])))
+	if end < len(runes) {
+		b.WriteString(theme.ValueStyle.Render(string(runes[end:])))
+	}
+	return b.String()
 }
 
 // libraryRow renders library-root rows: section headers and collection items,
@@ -542,23 +605,38 @@ func (m Model) libraryRow(r row, selected bool) string {
 	if r.kind == rowPlaylistItem || r.kind == rowAlbumItem {
 		indent = "   "
 	}
+	text := r.text
+	if r.kind == rowHeader && selected {
+		// T24: the focused group header carries the selected glyph, so the
+		// cursor moving between groups stays obvious without colour alone
+		// (Never-Color-Alone Rule).
+		if t := strings.TrimPrefix(text, theme.GlyphExpanded+" "); t != text {
+			text = theme.GlyphSelected + " " + t
+		}
+	}
 	if (r.kind == rowPlaylistItem || r.kind == rowAlbumItem) && r.meta != "" {
-		line := truncate(indent+r.text, w-visibleWidth(r.meta)-3)
-		plain := padRight(line, w-1-visibleWidth(r.meta)) + r.meta
+		line := truncate(indent+text, w-visibleWidth(r.meta)-3)
 		if selected {
+			plain := padRight(line, w-1-visibleWidth(r.meta)) + r.meta
 			return theme.SelectedStyle.Width(w).Render(plain)
 		}
-		return padRight(theme.ValueStyle.Render(line), w-1-visibleWidth(r.meta)) +
-			theme.MetaStyle.Render(r.meta)
+		var label string
+		if r.match != "" {
+			// T24: bold the matched substring of the label; the meta keeps its role
+			label = padRight(highlightMatch(line, r.match), w-1-visibleWidth(r.meta))
+		} else {
+			label = padRight(theme.ValueStyle.Render(line), w-1-visibleWidth(r.meta))
+		}
+		return label + theme.MetaStyle.Render(r.meta)
 	}
 	count := fmt.Sprintf("%d", r.count)
-	plain := padRight(indent+r.text, w-9) + padLeft(count, 8)
+	plain := padRight(indent+text, w-9) + padLeft(count, 8)
 	if selected {
 		return theme.SelectedStyle.Width(w).Render(plain)
 	}
-	name := theme.LabelStyle.Render(indent + r.text)
+	name := theme.LabelStyle.Render(indent + text)
 	if r.kind == rowPlaylistItem || r.kind == rowAlbumItem {
-		name = theme.ValueStyle.Render(indent + r.text)
+		name = theme.ValueStyle.Render(indent + text)
 	}
 	return padRight(name, w-9) + theme.NumberStyle.Render(padLeft(count, 8))
 }

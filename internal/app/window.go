@@ -143,7 +143,7 @@ func (m Model) paletteSpec() winSpec {
 		foot:     "enter run · esc close",
 	}
 	if m.cmdInput == "" {
-		s.rows = []winRow{{text: ":play <spotify:track:id> · play a track now"}}
+		s.rows = []winRow{{text: ":play <track, playlist or album link or uri> · play it now"}}
 	}
 	return s
 }

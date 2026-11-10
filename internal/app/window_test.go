@@ -1,10 +1,20 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/nahuel/spotify-tui/internal/library"
+	"github.com/nahuel/spotify-tui/internal/ui/theme"
+)
+
+// context target ids of the fixtures (22 base62 chars)
+const (
+	plTargetID = "plAAAAAAAAAAAAAAAAAAAA"
+	alTargetID = "alAAAAAAAAAAAAAAAAAAAA"
 )
 
 // windowBox locates the floating window in the rendered frame and asserts it
@@ -242,6 +252,128 @@ func TestPalettePlay(t *testing.T) {
 	play("frobnicate now")
 	if status := stripANSI(lines(m)[49]); !strings.Contains(status, "frobnicate") {
 		t.Errorf("unknown command should keep toasting with its name, got %q", status)
+	}
+}
+
+// --- T25: :play with context targets ---
+
+// runPalette types one command into the palette and runs it, draining the
+// catalog command it produced (the same contract runCatalogCmd applies).
+func runPalette(t *testing.T, m *Model, cmd string) {
+	t.Helper()
+	press(t, m, ":")
+	for _, r := range cmd {
+		press(t, m, string(r))
+	}
+	updated, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	*m = updated.(Model)
+	runCatalogCmd(t, m, c)
+}
+
+// contextPlayFixtures serves the playlist and album contents a :play
+// context resolves into, each carrying the context's own display name.
+func contextPlayFixtures(f *stubFetch) {
+	f.playlistsFn = func(offset int) (library.PlaylistPage, error) {
+		if offset != 0 {
+			return library.PlaylistPage{}, errors.New("unexpected offset — no prefetch")
+		}
+		return library.PlaylistPage{
+			Playlists: []library.PlaylistSummary{{ID: "pl1", Name: "Mine", Owner: "nahuel", Private: true, TrackCount: 1}},
+			Total:     1, NextOffset: -1,
+		}, nil
+	}
+	f.itemsFn = func(id string, offset int) (library.ItemsPage, error) {
+		if id != plTargetID {
+			return library.ItemsPage{}, errors.New("unexpected items request")
+		}
+		return library.ItemsPage{
+			Name: "Road Trip",
+			Tracks: []library.Track{
+				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+				{ID: realTrackID2, Title: "Blue in Green", Artist: "Miles Davis", Album: "Kind of Blue"},
+			}, Total: 2, NextOffset: -1,
+		}, nil
+	}
+	f.albumItemsFn = func(id string, offset int) (library.ItemsPage, error) {
+		if id != alTargetID {
+			return library.ItemsPage{}, errors.New("unexpected album items request")
+		}
+		return library.ItemsPage{
+			Name: "Kind of Blue",
+			Tracks: []library.Track{
+				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+			}, Total: 1, NextOffset: -1,
+		}, nil
+	}
+}
+
+// :play with a pasted playlist link resolves it, loads its tracks into the
+// list view (the context strip names it) and plays the first playable
+// track; the album uri rides the album resolver path.
+func TestPalettePlayContextLoadsAndPlays(t *testing.T) {
+	f := &stubFetch{}
+	contextPlayFixtures(f)
+	m, pl := newRealModel(t, 180, 50, f)
+	loadPlaylistsReady(t, m)
+
+	// a pasted playlist link with /intl-es/ segment and query string
+	runPalette(t, m, "play https://open.spotify.com/intl-es/playlist/"+plTargetID+"?si=abc")
+	if m.section != SectionTracks || m.sView {
+		t.Fatalf("a context target must land on the Tracks view, section=%v sView=%v", m.section, m.sView)
+	}
+	if got := strings.Join(f.calls, ","); !strings.Contains(got, "items "+plTargetID+" 0") {
+		t.Errorf("the playlist context must resolve through the items path, made [%s]", got)
+	}
+	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
+		t.Errorf("the first playable track must play, played %+v", pl.played)
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "Blue in Green") {
+		t.Errorf("the context's tracks must be in the list view, got:\n%s", got)
+	}
+	if strip := stripANSI(lines(m)[2]); !strings.Contains(strip, "Road Trip") {
+		t.Errorf("the context strip must name the loaded context, got %q", strip)
+	}
+
+	// an album uri rides the album resolver path and plays its first track
+	runPalette(t, m, "play spotify:album:"+alTargetID)
+	joined := strings.Join(f.calls, ",")
+	if !strings.Contains(joined, "albumItems "+alTargetID+" 0") {
+		t.Errorf("the album context must ride the album resolver path, made [%s]", joined)
+	}
+	if strings.Contains(joined, "items "+alTargetID) {
+		t.Errorf("the playlist items path must not fire for an album, made [%s]", joined)
+	}
+	if len(pl.played) != 2 || pl.played[1].ID != realTrackID {
+		t.Errorf("the album's first track must play, played %+v", pl.played)
+	}
+	if strip := stripANSI(lines(m)[2]); !strings.Contains(strip, "albums "+theme.GlyphCrumb+" Kind of Blue") {
+		t.Errorf("the context strip must name the album, got %q", strip)
+	}
+}
+
+// A garbage target keeps the toast behaviour, updated to name the accepted
+// forms; a context target in mock mode (no resolver) says so honestly.
+func TestPalettePlayGarbageAndMockContextToast(t *testing.T) {
+	m := newModel(t, 180, 50) // mock mode: no catalog fetch
+	play := func(cmd string) {
+		t.Helper()
+		runPalette(t, m, cmd)
+	}
+	play("play definitely not a link")
+	status := stripANSI(lines(m)[49])
+	if !strings.Contains(status, ":play") {
+		t.Errorf("invalid target must toast what :play wants, got %q", status)
+	}
+	for _, form := range []string{"track", "playlist", "album"} {
+		if !strings.Contains(status, form) {
+			t.Errorf("the toast must name the accepted forms, missing %q: %q", form, status)
+		}
+	}
+	// mock mode has no resolver: a context target says so instead of failing silently
+	play("play spotify:playlist:" + plTargetID)
+	status = stripANSI(lines(m)[49])
+	if !strings.Contains(status, "catalog") || !strings.Contains(status, "✗") {
+		t.Errorf("a context target without a resolver must toast honestly, got %q", status)
 	}
 }
 
