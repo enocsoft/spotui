@@ -446,20 +446,23 @@ func TestWebAPISearchMalformedBodyIsAnError(t *testing.T) {
 // is no 403-to-unavailable mapping any more — contents resolve through the
 // playback session instead (context_test.go).
 
-// TestSetSavedUsesUrisBodyAndTheLibraryPath: the 2026 generic endpoints take
-// Spotify URIs in a JSON body under me/library. Sending ids in the query, or PUT to
-// v1/library, is what made saving and unsaving fail with a bare status.
-func TestSetSavedUsesUrisBodyAndTheLibraryPath(t *testing.T) {
+// TestSetSavedSendsUrisAsQueryParams: the 2026 reference takes `uris` as a
+// comma-separated query parameter of Spotify URIs under me/library. Sending ids, a
+// wrong path, or a JSON body all fail — the body one with "Missing required field".
+func TestSetSavedSendsUrisAsQueryParams(t *testing.T) {
 	const id = "4uLU6hMCjMI75M1A2tKUQC"
 	for _, tc := range []struct {
 		saved  bool
 		method string
 	}{{true, "PUT"}, {false, "DELETE"}} {
 		var gotMethod, gotPath string
-		var gotBody []byte
+		var gotQuery url.Values
 		api := NewWebAPI(WebAPIClientFunc(func(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error) {
-			gotMethod, gotPath, gotBody = method, path, body
-			return []byte(`{}`), 200, nil
+			gotMethod, gotPath, gotQuery = method, path, query
+			if len(body) != 0 {
+				t.Errorf("saved=%v: the endpoint takes no body, got %s", tc.saved, body)
+			}
+			return []byte(``), 200, nil
 		}))
 		if err := api.SetSaved(context.Background(), id, tc.saved); err != nil {
 			t.Fatalf("saved=%v: %v", tc.saved, err)
@@ -467,8 +470,8 @@ func TestSetSavedUsesUrisBodyAndTheLibraryPath(t *testing.T) {
 		if gotMethod != tc.method || gotPath != "v1/me/library" {
 			t.Errorf("saved=%v: %s %s, want %s v1/me/library", tc.saved, gotMethod, gotPath, tc.method)
 		}
-		if want := `{"uris":["spotify:track:` + id + `"]}`; string(gotBody) != want {
-			t.Errorf("saved=%v body = %s, want %s", tc.saved, gotBody, want)
+		if want := "spotify:track:" + id; gotQuery.Get("uris") != want {
+			t.Errorf("saved=%v: uris = %q, want %q", tc.saved, gotQuery.Get("uris"), want)
 		}
 	}
 }

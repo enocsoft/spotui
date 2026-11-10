@@ -132,15 +132,9 @@ func webAPIError(status int, body []byte, err error) error {
 
 // call runs one request through the accessor and returns the body on 2xx.
 func (w *WebAPI) call(ctx context.Context, method, path string, query url.Values) ([]byte, error) {
-	return w.callWithBody(ctx, method, path, query, nil)
-}
-
-// callWithBody is call plus a JSON body: the generic library endpoints take the
-// Spotify URIs there, not in the query string.
-func (w *WebAPI) callWithBody(ctx context.Context, method, path string, query url.Values, payload []byte) ([]byte, error) {
 	cctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
-	body, status, err := w.client.Call(cctx, method, path, query, payload)
+	body, status, err := w.client.Call(cctx, method, path, query, nil)
 	if err != nil {
 		return nil, webAPIError(status, body, err)
 	}
@@ -489,21 +483,17 @@ func (it playlistSummaryItem) summary() PlaylistSummary {
 
 // SetSaved toggles the saved state through the generic 2026 endpoints: the
 // per-type endpoints (me/tracks, me/albums, …) are gone (scope 4).
-// SetSaved toggles one track through PUT/DELETE /v1/me/library. The 2026 API takes
-// Spotify URIs in a JSON body (not ids in the query) and both verbs live under
-// me/library — sending PUT to v1/library and ids in the query is what made the
-// toggle fail with a bare status.
+// SetSaved toggles one track through PUT/DELETE /v1/me/library. The 2026 reference
+// takes `uris` as a comma-separated QUERY parameter of Spotify URIs (not ids, and not
+// a JSON body — a body is answered with "Missing required field: uris"), and both
+// verbs live under me/library.
 func (w *WebAPI) SetSaved(ctx context.Context, trackID string, saved bool) error {
-	payload, err := json.Marshal(map[string][]string{
-		"uris": {"spotify:track:" + trackID},
-	})
-	if err != nil {
-		return err
-	}
+	q := url.Values{}
+	q.Set("uris", "spotify:track:"+trackID)
 	method := "PUT"
 	if !saved {
 		method = "DELETE"
 	}
-	_, err = w.callWithBody(ctx, method, "v1/me/library", nil, payload)
+	_, err := w.call(ctx, method, "v1/me/library", q)
 	return err
 }
