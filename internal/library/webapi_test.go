@@ -357,31 +357,6 @@ func TestWebAPISearchOffsetPagination(t *testing.T) {
 
 // --- saved toggle: the 2026 generic endpoints ---
 
-func TestWebAPISetSavedUsesGenericLibraryEndpoints(t *testing.T) {
-	// 2026: PUT /v1/library and DELETE /me/library — the per-type endpoints
-	// (me/tracks, me/albums...) are gone.
-	var calls []string
-	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
-		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
-		return 200, `{}`
-	})
-	api := NewWebAPI(client)
-	const id = "4uLU6hMCjMI75M1A2tKUQC"
-	if err := api.SetSaved(context.Background(), id, true); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	if err := api.SetSaved(context.Background(), id, false); err != nil {
-		t.Fatalf("unsave: %v", err)
-	}
-	want := []string{
-		"PUT /v1/library?ids=" + id,
-		"DELETE /me/library?ids=" + id,
-	}
-	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
-		t.Errorf("saved toggle calls:\n got %q\nwant %q", calls, want)
-	}
-}
-
 func TestWebAPISetSavedRejectsNon2xx(t *testing.T) {
 	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
 		return 403, `{"error":{"status":403,"message":"no permission"}}`
@@ -470,3 +445,30 @@ func TestWebAPISearchMalformedBodyIsAnError(t *testing.T) {
 // (a 404 stays an error); the Web API items path is gone entirely, so there
 // is no 403-to-unavailable mapping any more — contents resolve through the
 // playback session instead (context_test.go).
+
+// TestSetSavedUsesUrisBodyAndTheLibraryPath: the 2026 generic endpoints take
+// Spotify URIs in a JSON body under me/library. Sending ids in the query, or PUT to
+// v1/library, is what made saving and unsaving fail with a bare status.
+func TestSetSavedUsesUrisBodyAndTheLibraryPath(t *testing.T) {
+	const id = "4uLU6hMCjMI75M1A2tKUQC"
+	for _, tc := range []struct {
+		saved  bool
+		method string
+	}{{true, "PUT"}, {false, "DELETE"}} {
+		var gotMethod, gotPath string
+		var gotBody []byte
+		api := NewWebAPI(WebAPIClientFunc(func(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error) {
+			gotMethod, gotPath, gotBody = method, path, body
+			return []byte(`{}`), 200, nil
+		}))
+		if err := api.SetSaved(context.Background(), id, tc.saved); err != nil {
+			t.Fatalf("saved=%v: %v", tc.saved, err)
+		}
+		if gotMethod != tc.method || gotPath != "v1/me/library" {
+			t.Errorf("saved=%v: %s %s, want %s v1/me/library", tc.saved, gotMethod, gotPath, tc.method)
+		}
+		if want := `{"uris":["spotify:track:` + id + `"]}`; string(gotBody) != want {
+			t.Errorf("saved=%v body = %s, want %s", tc.saved, gotBody, want)
+		}
+	}
+}
