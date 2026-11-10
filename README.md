@@ -38,36 +38,34 @@ accounts, and Spotify refuses to play without an active subscription.
 
 ## Setup
 
-1. Create an app at <https://developer.spotify.com/dashboard>. Copy its **client ID**.
-2. Add this exact redirect URI to the app:
+Playback needs **no dashboard app**: the login is Authorization Code + PKCE done by the app with
+librespot's own client id, the same identity `ncspot` and `spotifyd` use.
 
-   ```
-   http://127.0.0.1:8888/login
-   ```
-
-   The path `/login` is fixed by the library and `localhost` is not accepted by Spotify — it has to be
-   the loopback **IP literal**. If you change the port in the config, change it here too.
-3. Write `~/.config/spotify-tui/config.toml`:
-
-   ```toml
-   client_id     = "<your client id>"
-   callback_port = 8888      # optional, this is the default
-   output        = ""        # optional: preferred sink name, empty = system default
-   ```
-
-   `client_id` is the dashboard app, used for the library and search calls. The embedded playback
-   session authenticates with **librespot's own** client id: a dashboard app is registered for the Web
-   API authorization flow, not for librespot's client-token exchange, and passing it there fails with a
-   bare `400`.
-4. Run it:
+1. Run it:
 
    ```sh
    go run ./cmd/spotify-tui
    ```
 
-   The first run shows a full-screen **login required** state with the authorization URL. Open it,
-   approve, and the app picks up the callback on `127.0.0.1:8888/login` and starts the player.
-   Credentials are cached, so this happens once.
+2. The first run shows a **login required** screen with the authorization URL, wrapped over several
+   lines, and saves the same URL verbatim to `$XDG_STATE_HOME/spotify-tui/login-url.txt` (usually
+   `~/.local/state/spotify-tui/login-url.txt`). Open it, approve, and the app picks up the callback on
+   `127.0.0.1:8888/login`. Credentials are cached in the state dir with `0600` permissions, so this
+   happens once.
+
+   Keep the app running while you approve, and do not reload the callback page afterwards: the
+   callback is single-use.
+
+3. Optional, only for the library and search slice: `client_id` in
+   `~/.config/spotify-tui/config.toml` names a Spotify dashboard app used for Web API calls, and that
+   app needs `http://127.0.0.1:8888/login` registered as a redirect URI (loopback **IP literal**;
+   `localhost` is rejected by Spotify). Playback does not use it.
+
+   ```toml
+   client_id     = "<dashboard app client id>"
+   callback_port = 8888      # optional, this is the default
+   output        = ""        # optional: preferred sink name, empty = system default
+   ```
 
 ## Playing something today
 
