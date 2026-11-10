@@ -2,11 +2,16 @@
 // library.WebAPIClient, which the plain net/http HTTP client implements for
 // the app and tests replace with httptest fixtures.
 //
-// 2026 API constraints baked in here (spec S14, L7):
+// Playlist contents are the exception on purpose: since the resolver swap,
+// items no longer ride the Web API at all — GET /playlists/{id}/items
+// answered 403 for a playlist the user does not own (2026 API constraint,
+// spec S14) — because the catalog resolves them through the playback
+// session's spclient instead (library.ContextResolver, wired by
+// player.Catalog). That call needs no Web API quota and has no owner
+// restriction, which is why ncspot shows those playlists.
+//
+// What still rides the Web API (2026 constraints baked in, spec S14, L7):
 //   - playlists: GET /v1/me/playlists, 50 per page, `next` followed lazily;
-//   - contents: GET /playlists/{id}/items — `tracks` is renamed `items`, and
-//     the key is simply absent for playlists the user neither owns nor
-//     collaborates on: that becomes an unavailable state, never an empty list;
 //   - search: GET /v1/search with limit capped at 10, offset pagination;
 //   - saved toggle: generic PUT /v1/library and DELETE /me/library — the
 //     per-type endpoints (me/tracks, …) are gone;
@@ -17,9 +22,7 @@ package library
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -54,14 +57,27 @@ func (f WebAPIClientFunc) Call(ctx context.Context, method, path string, query u
 	return f(ctx, method, path, query, body)
 }
 
-// WebAPI implements library.Fetch on top of a WebAPIClient. Safe for
-// concurrent use as long as the client is (the session accessor is).
+// WebAPI implements library.Fetch on top of a WebAPIClient. Playlist
+// contents ride the playback resolver when one is wired (player.Catalog
+// does); without it Items fails with the honest error the UI renders. Safe
+// for concurrent use as long as the client is (the session accessor is).
 type WebAPI struct {
-	client WebAPIClient
+	client  WebAPIClient
+	resolve ContextResolver // the playback context resolver,
+	batch   MetadataBatch   // fallback names for thin context entries
 }
 
 // NewWebAPI builds the real catalog over the given accessor.
 func NewWebAPI(client WebAPIClient) *WebAPI { return &WebAPI{client: client} }
+
+// WithContentsResolver wires the playlist-contents path to the playback
+// resolver (sess.Spclient().ContextResolve) and the optional batch metadata
+// fallback, both owned by the playback session. It returns the same WebAPI
+// for wiring-time chaining.
+func (w *WebAPI) WithContentsResolver(resolve ContextResolver, batch MetadataBatch) *WebAPI {
+	w.resolve, w.batch = resolve, batch
+	return w
+}
 
 // webAPIError turns a non-2xx response into an *APIError, parsing Spotify's
 // error body ({"error":{"status":..,"message":".."}}) when present.
@@ -163,88 +179,15 @@ func (w *WebAPI) Playlists(ctx context.Context, offset int) (PlaylistPage, error
 	return page, nil
 }
 
-// --- GET /playlists/{id}/items ---
+// --- playlist contents via the playback resolver ---
 
+// Items resolves the playlist's contents the way playback does
+// (sess.Spclient().ContextResolve, no Web API quota, no owner restriction.
+// The mapping lives in context.go; the old Web API items endpoint is gone:
+// it answered 403 for a playlist the user does not own (spec S14) and no
+// fallback uses it any more.
 func (w *WebAPI) Items(ctx context.Context, playlistID string, offset int) (ItemsPage, error) {
-	q := url.Values{}
-	q.Set("limit", strconv.Itoa(playlistPageLimit))
-	q.Set("offset", strconv.Itoa(offset))
-	body, err := w.call(ctx, "GET", "v1/playlists/"+url.PathEscape(playlistID)+"/items", q)
-	if err != nil {
-		// 2026 (S14): a playlist you neither own nor collaborate on is refused with
-		// 403, not with a missing items key. That is the same fact and it deserves the
-		// same honest state, not "403 forbidden".
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden {
-			return ItemsPage{Offset: offset, Unavailable: unavailableContents}, nil
-		}
-		return ItemsPage{}, err
-	}
-	var raw struct {
-		Total  int `json:"total"`
-		Offset int `json:"offset"`
-		Items  *[]struct {
-			AddedAt string `json:"added_at"`
-			Track   *struct {
-				ID      string `json:"id"`
-				Name    string `json:"name"`
-				URI     string `json:"uri"`
-				Artists []struct {
-					Name string `json:"name"`
-				} `json:"artists"`
-				Album struct {
-					Name string `json:"name"`
-				} `json:"album"`
-				DurationMs int64 `json:"duration_ms"`
-			} `json:"track"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return ItemsPage{}, fmt.Errorf("decoding playlist items: %w", err)
-	}
-	page := ItemsPage{Offset: offset, Total: raw.Total}
-	if raw.Items == nil {
-		// 2026 (S14): no items key = the user neither owns nor collaborates
-		// on this playlist. Never render that as an empty list.
-		page.Unavailable = unavailableContents
-		return page, nil
-	}
-	for _, it := range *raw.Items {
-		if it.Track == nil {
-			continue // removed local files and gaps decode as null tracks
-		}
-		var artist string
-		for i, a := range it.Track.Artists {
-			if i > 0 {
-				artist += ", "
-			}
-			artist += a.Name
-		}
-		page.Tracks = append(page.Tracks, Track{
-			ID:       it.Track.ID,
-			Title:    it.Track.Name,
-			Artist:   artist,
-			Album:    it.Track.Album.Name,
-			Duration: time.Duration(it.Track.DurationMs) * time.Millisecond,
-			Added:    shortDate(it.AddedAt),
-		})
-	}
-	page.NextOffset = nextOffset(offset, playlistPageLimit, raw.Total)
-	return page, nil
-}
-
-// shortDate renders a Spotify added_at as the short date label the table's
-// ADDED column shows ("12 Nov"). The API normally sends RFC3339; a bare date
-// still renders instead of silently vanishing.
-func shortDate(addedAt string) string {
-	t, err := time.Parse(time.RFC3339, addedAt)
-	if err != nil {
-		t, err = time.Parse("2006-01-02", addedAt)
-	}
-	if err != nil {
-		return ""
-	}
-	return t.Format("2 Jan")
+	return itemsViaContext(ctx, playlistID, offset, w.resolve, w.batch)
 }
 
 // --- GET /v1/search ---
@@ -390,5 +333,3 @@ func (w *WebAPI) SetSaved(ctx context.Context, trackID string, saved bool) error
 	_, err := w.call(ctx, method, path, q)
 	return err
 }
-
-const unavailableContents = "contents unavailable · you are not the owner or a collaborator"

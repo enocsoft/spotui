@@ -206,9 +206,13 @@ func TestCatalogPlaylistsPagingFollowsNextLazily(t *testing.T) {
 	}
 }
 
-// --- playlist contents: a playlist without items is unavailable, never empty ---
+// --- playlist contents: a playlist the user does not own loads now ---
 
-func TestCatalogPlaylistWithoutItemsShowsUnavailableState(t *testing.T) {
+// The regression that started the resolver path: a playlist the user does not
+// own opens with its contents. The playback resolver has no owner restriction
+// (the old Web API items endpoint answered 403 and showed "contents
+// unavailable"), so the drill-down must render the real table.
+func TestCatalogForeignPlaylistContentsLoad(t *testing.T) {
 	f := &stubFetch{
 		playlistsFn: func(offset int) (library.PlaylistPage, error) {
 			return library.PlaylistPage{
@@ -219,11 +223,12 @@ func TestCatalogPlaylistWithoutItemsShowsUnavailableState(t *testing.T) {
 			}, nil
 		},
 		itemsFn: func(id string, offset int) (library.ItemsPage, error) {
-			// 2026 (S14): no items key for playlists the user does not own.
-			return library.ItemsPage{Total: 37, Unavailable: "contents unavailable · you are not the owner or a collaborator"}, nil
+			return library.ItemsPage{Tracks: []library.Track{
+				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue", Duration: 562000000000},
+			}, Total: 1, NextOffset: -1}, nil
 		},
 	}
-	m, _ := newRealModel(t, 180, 50, f)
+	m, pl := newRealModel(t, 180, 50, f)
 	loadPlaylistsReady(t, m)
 
 	// the row under the header; enter opens it
@@ -233,11 +238,52 @@ func TestCatalogPlaylistWithoutItemsShowsUnavailableState(t *testing.T) {
 		t.Fatal("enter on a real playlist row must drill into it")
 	}
 	got := m.View()
-	if !strings.Contains(got, "contents unavailable") || !strings.Contains(got, "not the owner or a collaborator") {
-		t.Errorf("the drill-down must say why there are no contents, got:\n%s", got)
+	if !strings.Contains(got, "So What") {
+		t.Errorf("a non-owned playlist must render its contents, got:\n%s", got)
 	}
-	if strings.Contains(got, "TITLE") {
-		t.Errorf("an unavailable playlist must not render an empty track table pretending success:\n%s", got)
+	if strings.Contains(got, "not the owner") || strings.Contains(got, "contents unavailable") {
+		t.Errorf("the 403 mapping is gone; a non-owned playlist must not show the old unavailable state:\n%s", got)
+	}
+
+	// enter on a resolved row still plays it (the player accepts a URI)
+	pressRun(t, m, "enter")
+	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
+		t.Errorf("enter on a resolved row must play it, played %+v", pl.played)
+	}
+}
+
+// The resolver is a bounded set: entries without a playable uri (local
+// files, episodes) are skipped and counted, and a truncated resolve is never
+// rendered as a complete playlist — both get a footnote row.
+func TestCatalogSkippedAndTruncatedFootnotes(t *testing.T) {
+	f := &stubFetch{
+		playlistsFn: func(offset int) (library.PlaylistPage, error) {
+			return library.PlaylistPage{
+				Playlists: []library.PlaylistSummary{
+					{ID: "pl1", Name: "Mine", Owner: "nahuel", Private: true, TrackCount: 42},
+				},
+				Total: 1, NextOffset: -1,
+			}, nil
+		},
+		itemsFn: func(id string, offset int) (library.ItemsPage, error) {
+			return library.ItemsPage{
+				Tracks: []library.Track{
+					{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+				},
+				Total: 42, Skipped: 2, Truncated: true, NextOffset: -1,
+			}, nil
+		},
+	}
+	m, _ := newRealModel(t, 180, 50, f)
+	loadPlaylistsReady(t, m)
+	pressRun(t, m, "j")
+	pressRun(t, m, "enter")
+	got := m.View()
+	if !strings.Contains(got, "2 entries not playable") {
+		t.Errorf("skipped entries must be counted in a footnote row, got:\n%s", got)
+	}
+	if !strings.Contains(got, "showing 1 of 42") {
+		t.Errorf("a truncated resolve must be rendered as a subset, got:\n%s", got)
 	}
 }
 
@@ -513,9 +559,6 @@ func TestCatalogViewFitsTerminal(t *testing.T) {
 			}, nil
 		},
 		itemsFn: func(id string, offset int) (library.ItemsPage, error) {
-			if id == "pl2" {
-				return library.ItemsPage{Unavailable: "contents unavailable · you are not the owner or a collaborator"}, nil
-			}
 			return library.ItemsPage{Tracks: []library.Track{
 				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue", Duration: 562000000000},
 			}, Total: 1, NextOffset: -1}, nil
@@ -546,14 +589,14 @@ func TestCatalogViewFitsTerminal(t *testing.T) {
 		}
 		check("playlists")
 
-		// drill-down: owned, then unavailable
+		// drill-down: two playlists, both resolve with contents now
 		pressRun(t, m, "j")
 		pressRun(t, m, "enter")
-		check("owned playlist")
+		check("first playlist")
 		pressKey(t, m, tea.KeyEsc)
 		pressRun(t, m, "j")
 		pressRun(t, m, "enter")
-		check("unavailable playlist")
+		check("second playlist")
 		pressKey(t, m, tea.KeyEsc)
 
 		// the search window over the list

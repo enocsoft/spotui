@@ -2,14 +2,12 @@ package library
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fixtureClient returns a WebAPIClient over an httptest server. handler sees
@@ -79,17 +77,6 @@ const plBebop = `{"id":"pl1","name":"Bebop Essentials","owner":{"display_name":"
 // playlist without the items field: the user is not the owner or a
 // collaborator, so the 2026 API never returns contents (spec S14).
 const plForeign = `{"id":"pl2","name":"Shared List","owner":{"display_name":"someone-else"},"public":true,"collaborative":false}`
-
-func trackJSON(id, name, artist, album string, ms int) string {
-	return `{"added_at":"2025-11-12","track":{"id":"` + id + `","name":"` + name +
-		`","artists":[{"name":"` + artist + `"}],"album":{"name":"` + album +
-		`"},"duration_ms":` + itoa(ms) + `,"uri":"spotify:track:` + id + `"}}`
-}
-
-func itoa(n int) string {
-	b, _ := json.Marshal(n)
-	return string(b)
-}
 
 // --- GET /v1/me/playlists ---
 
@@ -195,96 +182,6 @@ func TestWebAPIPlaylistsEmptyLibrary(t *testing.T) {
 	}
 	if len(page.Playlists) != 0 || page.NextOffset != -1 {
 		t.Errorf("empty library page = %+v, want no rows and no next", page)
-	}
-}
-
-// --- GET /playlists/{id}/items ---
-
-func TestWebAPIPlaylistItems(t *testing.T) {
-	body := `{"total":2,"offset":0,"next":null,"items":[` +
-		trackJSON("4uLU6hMCjMI75M1A2tKUQC", "So What", "Miles Davis", "Kind of Blue", 562000) + `,` +
-		`{"added_at":"2025-11-11","track":null}` + `]}`
-	client, log := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
-		if r.URL.Path != "/v1/playlists/pl1/items" {
-			t.Errorf("path = %q, want /v1/playlists/pl1/items (2026 rename: tracks is gone)", r.URL.Path)
-		}
-		return 200, body
-	})
-	page, err := NewWebAPI(client).Items(context.Background(), "pl1", 0)
-	if err != nil {
-		t.Fatalf("Items: %v", err)
-	}
-	log.want(t, "GET /v1/playlists/pl1/items?limit=50&offset=0")
-	if page.Unavailable != "" {
-		t.Fatalf("owned playlist reported unavailable: %q", page.Unavailable)
-	}
-	// the null track (removed local file) is skipped, not rendered as a row
-	if len(page.Tracks) != 1 {
-		t.Fatalf("tracks = %d, want 1 (null tracks skipped)", len(page.Tracks))
-	}
-	tr := page.Tracks[0]
-	if tr.ID != "4uLU6hMCjMI75M1A2tKUQC" || tr.Title != "So What" ||
-		tr.Artist != "Miles Davis" || tr.Album != "Kind of Blue" {
-		t.Errorf("track = %+v, want the fixture values", tr)
-	}
-	if tr.Duration != 562000*time.Millisecond {
-		t.Errorf("duration = %v, want 9m22s", tr.Duration)
-	}
-	if tr.Added != "12 Nov" {
-		t.Errorf("added = %q, want a short date label", tr.Added)
-	}
-}
-
-func TestWebAPIPlaylistWithoutItemsIsUnavailable(t *testing.T) {
-	// 2026 (S14): contents are only returned for playlists the user owns or
-	// collaborates on. The body has no items key: an honest state, never an
-	// empty list pretending there are no tracks.
-	client, log := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
-		return 200, `{"total":37,"offset":0,"next":null}`
-	})
-	page, err := NewWebAPI(client).Items(context.Background(), "pl2", 0)
-	if err != nil {
-		t.Fatalf("Items: %v", err)
-	}
-	log.want(t, "GET /v1/playlists/pl2/items?limit=50&offset=0")
-	if page.Unavailable == "" {
-		t.Fatal("a playlist without items must report why, not an empty page")
-	}
-	if !strings.Contains(page.Unavailable, "owner") && !strings.Contains(page.Unavailable, "collaborat") {
-		t.Errorf("unavailable reason should name the 2026 restriction: %q", page.Unavailable)
-	}
-	if len(page.Tracks) != 0 {
-		t.Errorf("tracks = %d, want none", len(page.Tracks))
-	}
-}
-
-func TestWebAPIPlaylistItemsPages(t *testing.T) {
-	p1 := `{"total":52,"offset":0,"next":"next","items":[` + trackJSON("4uLU6hMCjMI75M1A2tKUQC", "A", "x", "y", 1000) + `]}`
-	p2 := `{"total":52,"offset":50,"next":null,"items":[` + trackJSON("4uLU6hMCjMI75M1A2tKUQD", "B", "x", "y", 2000) + `]}`
-	client, log := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
-		if r.URL.Query().Get("offset") == "0" {
-			return 200, p1
-		}
-		return 200, p2
-	})
-	api := NewWebAPI(client)
-	first, err := api.Items(context.Background(), "pl1", 0)
-	if err != nil {
-		t.Fatalf("first page: %v", err)
-	}
-	if first.NextOffset != 50 {
-		t.Fatalf("NextOffset = %d, want 50", first.NextOffset)
-	}
-	second, err := api.Items(context.Background(), "pl1", 50)
-	if err != nil {
-		t.Fatalf("second page: %v", err)
-	}
-	log.want(t, "GET /v1/playlists/pl1/items?limit=50&offset=0", "GET /v1/playlists/pl1/items?limit=50&offset=50")
-	if len(second.Tracks) != 1 || second.Tracks[0].Title != "B" {
-		t.Errorf("second page tracks = %+v", second)
-	}
-	if second.NextOffset != -1 {
-		t.Errorf("NextOffset = %d, want -1", second.NextOffset)
 	}
 }
 
@@ -426,7 +323,7 @@ func TestWebAPIErrorCarriesStatusAndMessage(t *testing.T) {
 	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
 		return 404, `{"error":{"status":404,"message":"playlist not found"}}`
 	})
-	_, err := NewWebAPI(client).Items(context.Background(), "nope", 0)
+	_, err := NewWebAPI(client).Playlists(context.Background(), 0)
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("want *APIError, got %v", err)
@@ -490,32 +387,7 @@ func TestWebAPISearchMalformedBodyIsAnError(t *testing.T) {
 	}
 }
 
-// TestItemsForbiddenIsUnavailable: in 2026 Spotify refuses the items of a playlist
-// you neither own nor collaborate on with 403 instead of withholding the key. Both
-// shapes are the same fact and must render the same honest state.
-func TestItemsForbiddenIsUnavailable(t *testing.T) {
-	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
-		return http.StatusForbidden, `{"error":{"status":403,"message":"Forbidden"}}`
-	})
-	page, err := NewWebAPI(client).Items(context.Background(), "37i9dQZF1DXcBWIGoYBM5M", 0)
-	if err != nil {
-		t.Fatalf("a 403 is not a failure to report, it is an unavailable playlist: %v", err)
-	}
-	if page.Unavailable == "" {
-		t.Fatalf("a 403 must set Unavailable, got %+v", page)
-	}
-	if !strings.Contains(page.Unavailable, "owner") {
-		t.Errorf("the state should say why: %q", page.Unavailable)
-	}
-}
-
-// TestItemsOtherErrorsStillFail: only 403 maps to unavailable. A 500 stays an error
-// so a real outage is never disguised as a permissions fact.
-func TestItemsOtherErrorsStillFail(t *testing.T) {
-	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
-		return http.StatusInternalServerError, `{"error":{"status":500,"message":"boom"}}`
-	})
-	if _, err := NewWebAPI(client).Items(context.Background(), "x", 0); err == nil {
-		t.Fatal("a 500 must surface as an error")
-	}
-}
+// TestItemsOtherErrorsStillFail is covered by TestWebAPIErrorCarriesStatusAndMessage
+// (a 404 stays an error); the Web API items path is gone entirely, so there
+// is no 403-to-unavailable mapping any more — contents resolve through the
+// playback session instead (context_test.go).

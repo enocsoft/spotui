@@ -26,7 +26,6 @@ const (
 	stLoading
 	stEmpty
 	stError
-	stUnavailable
 	stInfo // rate limited: the info role (DESIGN global states)
 )
 
@@ -39,7 +38,8 @@ type playlistsMsg struct {
 	err    error
 }
 
-// itemsMsg carries one page of GET /playlists/{id}/items (or its error).
+// itemsMsg carries one slice of the playlist's resolved contents (or its
+// error). The contents ride the playback resolver (library/context.go).
 type itemsMsg struct {
 	plID   string
 	offset int
@@ -132,14 +132,11 @@ func (m *Model) applyItems(msg itemsMsg) {
 		return
 	}
 	m.plItemsErr = nil
-	m.plUnavailable = msg.page.Unavailable
-	if msg.offset == 0 {
-		m.plTracks = msg.page.Tracks
-	} else {
-		m.plTracks = append(m.plTracks, msg.page.Tracks...)
-	}
+	m.plTracks = append(m.plTracks, msg.page.Tracks...)
 	m.plTotal = msg.page.Total
 	m.plNext = msg.page.NextOffset
+	// What the bounded resolver could not show — footnoted, never silent.
+	m.plSkipped, m.plTruncated = msg.page.Skipped, msg.page.Truncated
 	m.clampCursor()
 }
 
@@ -244,7 +241,7 @@ func (m *Model) ensureMorePlaylists() tea.Cmd {
 }
 
 func (m *Model) ensureMoreItems() tea.Cmd {
-	if m.plItemsLoading || m.plUnavailable != "" || m.plItemsErr != nil || m.plNext < 0 {
+	if m.plItemsLoading || m.plItemsErr != nil || m.plNext < 0 {
 		return nil
 	}
 	rows := m.visibleRows()
@@ -268,18 +265,19 @@ func (m *Model) ensurePlaylistsLoaded() tea.Cmd {
 // --- actions on the real catalog ---
 
 // openPlaylist drills into a real playlist. Cached contents are kept: re-entering
-// a playlist the user just left must not refetch.
+// a playlist the user just left must not re-resolve.
 func (m *Model) openPlaylist(s library.PlaylistSummary) tea.Cmd {
 	m.section = SectionLibrary
 	m.drillDown = true
 	m.cursor, m.listOffset = 0, 0
-	if m.plID == s.ID && (len(m.plTracks) > 0 || m.plUnavailable != "" || m.plItemsErr != nil) {
+	if m.plID == s.ID && (len(m.plTracks) > 0 || m.plItemsErr != nil || m.plSkipped > 0) {
 		return nil
 	}
 	m.plID, m.plName, m.plOwner = s.ID, s.Name, s.Owner
 	m.plPrivate, m.plCollab = s.Private, s.Collaborative
-	m.plTracks, m.plUnavailable, m.plItemsErr = nil, "", nil
+	m.plTracks, m.plItemsErr = nil, nil
 	m.plTotal, m.plNext = s.TrackCount, -1
+	m.plSkipped, m.plTruncated = 0, false
 	if m.plTotal == library.NoTrackCount {
 		m.plTotal = 0
 	}
@@ -374,15 +372,35 @@ func (m Model) trackRows() []row {
 	for i, t := range tracks {
 		rows = append(rows, row{kind: rowTrack, track: t, num: i + 1, playing: m.playlistPlaying(t.ID)})
 	}
-	if m.section == SectionLibrary && m.drillDown && m.plItemsLoading && len(tracks) > 0 {
-		rows = append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading more…"})
+	if m.section == SectionLibrary && m.drillDown {
+		rows = m.appendFootnotes(rows, len(tracks))
+	}
+	return rows
+}
+
+// appendFootnotes puts what the bounded resolver could not show under the
+// track list: entries with no playable uri (local files, episodes) and a
+// truncated resolve — counted, never silently dropped or pretended complete.
+// There is no "loading more" row here by design: the resolver answers one
+// bounded set (itemsViaContext), so plNext stays -1 and no second page exists.
+func (m Model) appendFootnotes(rows []row, n int) []row {
+	if n == 0 {
+		return rows // the status row above already carries the facts
+	}
+	if m.plSkipped > 0 {
+		rows = append(rows, row{kind: rowStatus, st: stInfo,
+			text: theme.GlyphIdle + fmt.Sprintf(" %d entries not playable · local files or episodes", m.plSkipped)})
+	}
+	if m.plTruncated {
+		rows = append(rows, row{kind: rowStatus, st: stInfo,
+			text: theme.GlyphIdle + fmt.Sprintf(" resolver subset · showing %d of %d tracks", n, m.plTotal)})
 	}
 	return rows
 }
 
 // appendPlaylistStatus puts the panel state in place of an empty track list:
-// loading, error, the honest unavailable state (2026: not owner/collaborator)
-// or a real empty playlist — never an empty list pretending success.
+// loading, error, the skipped-entries footnote when nothing was playable, or
+// a real empty playlist — never an empty list pretending success.
 func (m Model) appendPlaylistStatus(rows []row, n int) []row {
 	if n > 0 {
 		return rows
@@ -390,10 +408,11 @@ func (m Model) appendPlaylistStatus(rows []row, n int) []row {
 	switch {
 	case m.plItemsErr != nil:
 		return append(rows, m.errorStatusRow(m.plItemsErr))
-	case m.plUnavailable != "":
-		return append(rows, row{kind: rowStatus, st: stUnavailable, text: theme.GlyphIdle + " " + m.plUnavailable})
 	case m.plItemsLoading:
 		return append(rows, row{kind: rowStatus, st: stLoading, text: theme.GlyphIdle + " loading tracks…"})
+	case m.plSkipped > 0:
+		return append(rows, row{kind: rowStatus, st: stInfo,
+			text: theme.GlyphIdle + fmt.Sprintf(" %d entries not playable · local files or episodes", m.plSkipped)})
 	default:
 		return append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " this playlist has no tracks"})
 	}

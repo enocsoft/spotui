@@ -35,16 +35,19 @@ type PlaylistPage struct {
 	NextOffset int
 }
 
-// ItemsPage is one page of GET /playlists/{id}/items (the 2026 rename:
-// `tracks` is gone). Unavailable is non-empty when the 2026 API withholds the
-// contents (the user is not the owner or a collaborator): an honest state that
-// says why, never an empty list pretending there are no tracks.
+// ItemsPage is one page of playlist contents. Since the resolver swap the
+// contents come from the playback session's ContextResolve (context.go), not
+// the Web API: no owner restriction, but the resolver answers one bounded
+// set, so the page states honestly what it could not show — Skipped counts
+// entries without a playable uri (local files, episodes) and Truncated marks
+// a resolve that did not cover the whole playlist.
 type ItemsPage struct {
-	Tracks      []Track
-	Offset      int
-	Total       int
-	NextOffset  int
-	Unavailable string
+	Tracks     []Track
+	Offset     int
+	Total      int
+	NextOffset int
+	Skipped    int  // entries without a playable uri, counted not dropped
+	Truncated  bool // the resolver returned a subset of the playlist
 }
 
 // AlbumSummary is one search-result row of type album.
@@ -80,7 +83,9 @@ type SearchPage struct {
 type Fetch interface {
 	// Playlists fetches one page of the user's playlists (50 per page).
 	Playlists(ctx context.Context, offset int) (PlaylistPage, error)
-	// Items fetches one page of a playlist's tracks (50 per page).
+	// Items returns one slice of a playlist's contents resolved through the
+	// playback session (no Web API quota, no owner restriction). The set is
+	// bounded; Skipped/Truncated state the parts it could not show.
 	Items(ctx context.Context, playlistID string, offset int) (ItemsPage, error)
 	// Search queries tracks, albums and playlists (limit cap 10).
 	Search(ctx context.Context, query string, offset int) (SearchPage, error)

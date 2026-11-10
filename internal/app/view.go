@@ -325,7 +325,7 @@ func (m Model) realContextStrip(w int) string {
 			theme.TitleStyle.Render(truncate(m.plName, w/3)) + "  " +
 			theme.MetaStyle.Render(m.plOwner+" · "+m.privacyWord())
 		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks", m.plCount()))
-		if m.plNext < 0 && m.plUnavailable == "" && m.plItemsErr == nil && len(m.plTracks) > 0 {
+		if m.plNext < 0 && m.plItemsErr == nil && len(m.plTracks) > 0 {
 			right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s", m.plTotal, fmtTotal(totalDuration(m.plTracks))))
 		}
 	case m.section == SectionLibrary:
@@ -393,11 +393,6 @@ func (m Model) listBody(h int) []string {
 	out := make([]string, 0, h)
 	dataRows := h
 	inTrackView := !(m.section == SectionLibrary && !m.drillDown)
-	// An unavailable playlist (2026: not owner/collaborator) must not render
-	// an empty track table pretending success — only its honest state (T7).
-	if m.fetch != nil && m.section == SectionLibrary && m.drillDown && m.plUnavailable != "" {
-		inTrackView = false
-	}
 	if inTrackView {
 		out = append(out, tableHeader(tableLayout(m.w)))
 		dataRows--
@@ -533,8 +528,8 @@ func (m Model) libraryRow(r row, selected bool) string {
 }
 
 // statusLine renders a panel state row in place: loading / empty / info in
-// the muted meta role, error and unavailable in the value role with their
-// reason. Selected states take the surface band like any row.
+// the muted meta role, error in the value role with its reason. Selected
+// states take the surface band like any row.
 func (m Model) statusLine(r row, selected bool) string {
 	line := " " + r.text
 	if r.hint != "" {
@@ -545,7 +540,7 @@ func (m Model) statusLine(r row, selected bool) string {
 		return theme.SelectedStyle.Width(m.w).Render(" " + padRight(line, m.w-2))
 	}
 	style := theme.MetaStyle
-	if r.st == stError || r.st == stUnavailable {
+	if r.st == stError {
 		style = theme.ValueStyle
 	}
 	return " " + style.Render(padRight(line, m.w-2))

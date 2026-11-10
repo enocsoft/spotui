@@ -114,14 +114,17 @@ type Model struct {
 	plsTotal   int
 	plsNext    int // offset of the next page, -1 when exhausted
 
-	// Focused playlist contents (drill-down). plUnavailable non-empty is the
-	// 2026 not-owner state (S14): an honest state, never an empty list.
+	// Focused playlist contents (drill-down), resolved through the playback
+	// resolver (library/context.go). plSkipped/plTruncated carry what the
+	// bounded resolver could not show, footnoted under the list — never a
+	// silent drop and never a playlist pretended complete.
 	plID, plName, plOwner string
 	plPrivate, plCollab   bool
-	plUnavailable         string
 	plTracks              []library.Track
 	plTotal               int
 	plNext                int
+	plSkipped             int  // entries with no playable uri, counted
+	plTruncated           bool // the resolver returned a subset
 	plItemsLoading        bool
 	plItemsErr            error
 	iPending              int

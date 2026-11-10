@@ -277,6 +277,18 @@ type stubWebTokens struct{ token string }
 func (s stubWebTokens) AccessToken(context.Context) (string, error) { return s.token, nil }
 func (s stubWebTokens) Refresh(context.Context) error               { return nil }
 
+// TestCatalogItemsNeedsThePlaybackResolver: playlist contents resolve
+// through the playback session's spclient (no Web API quota, no owner
+// restriction); before the session is live that must fail with the honest
+// error the UI renders, never a silent empty page.
+func TestCatalogItemsNeedsThePlaybackResolver(t *testing.T) {
+	p := New(Options{ConfigDir: t.TempDir(), ClientID: "dashboard-cid"}, nil)
+	_, err := p.Catalog().Items(context.Background(), "37i9dQZF1DXcBWIGoYBM5M", 0)
+	if err == nil || !strings.Contains(err.Error(), "no embedded session") {
+		t.Errorf("Items before the session = %v, want the no-session resolver error", err)
+	}
+}
+
 // TestCatalogSendsTheWebAPITokenNeverTheSessionToken: the catalog talks to
 // api.spotify.com over plain HTTP with the library's own token; the playback
 // session token must never ride along.

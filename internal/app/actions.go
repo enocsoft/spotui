@@ -16,12 +16,12 @@ const (
 	rowHeader rowKind = iota
 	rowPlaylistItem
 	rowTrack
-	rowStatus // loading / empty / error / unavailable / rate-limit panel state
+	rowStatus // loading / empty / error / rate-limit panel state
 )
 
 // row is one visible list row. The list is one full-screen component (S4);
 // its rows are either section headers, a collection item, a track or a panel
-// status row (loading, empty, error, unavailable).
+// status row (loading, empty, error).
 type row struct {
 	kind    rowKind
 	text    string
