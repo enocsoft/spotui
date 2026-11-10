@@ -109,6 +109,10 @@ const (
 	EventState EventType = iota
 	// EventLogin carries the interactive auth URL in LoginURL (spec S9).
 	EventLogin
+	// EventConnecting means the token is in hand and the session bootstrap is
+	// running. Without it the UI sits on the login screen with no sign of life.
+	EventConnecting
+
 	// EventReady means the embedded player session is established.
 	EventReady
 	// EventFailed carries the bootstrap failure in Err.

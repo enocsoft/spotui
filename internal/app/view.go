@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/nahuel/spotify-tui/internal/config"
 	"regexp"
 	"strings"
 	"time"
@@ -119,6 +120,9 @@ func (m Model) visibleDataRows() int {
 func (m Model) View() string {
 	if m.w < minWidth {
 		return m.refusalView()
+	}
+	if m.connecting {
+		return m.connectingView()
 	}
 	if m.loginURL != "" {
 		return m.loginView()
@@ -643,3 +647,21 @@ func totalDuration(tracks []library.Track) time.Duration {
 // loginCallbackURL is where the interactive-login callback lands (spec S12:
 // loopback redirect with an IP literal, never localhost).
 func loginCallbackURL(port int) string { return fmt.Sprintf("http://127.0.0.1:%d/login", port) }
+
+// connectingView covers the gap between the authorization callback and a live
+// session. It was silent before: the login screen stayed up while the session
+// negotiated, which reads as a frozen app. The log path is on screen because the
+// handshake is the one place where the only evidence lives in a file.
+func (m Model) connectingView() string {
+	return m.messageView([]string{
+		"",
+		theme.TitleStyle.Render("starting the session"),
+		"",
+		theme.ValueStyle.Render("the authorization was accepted — handing the token to the player"),
+		"",
+		theme.MetaStyle.Render("if this stays here, the log is " + config.StateDir() + "/player.log"),
+		"",
+		theme.MetaStyle.Render("build " + Revision()),
+		theme.LabelStyle.Render("ctrl+c quit"),
+	})
+}

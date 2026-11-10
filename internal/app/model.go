@@ -71,7 +71,11 @@ type Model struct {
 	eventCh   <-chan library.Event // real-player events; nil for the mock
 	loginURL  string               // non-empty: full-screen login state (S9)
 	loginFile string
-	playerErr error // non-nil: full-screen player error state
+	// connecting is true between the token and the session handshake: the login
+	// screen must hand over to something that shows life, or a slow bootstrap looks
+	// like a dead app.
+	connecting bool
+	playerErr  error // non-nil: full-screen player error state
 
 	w, h         int
 	section      Section
@@ -170,11 +174,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playerEventMsg:
 		switch msg.Type {
 		case library.EventLogin:
-			m.loginURL, m.loginFile = msg.LoginURL, msg.LoginFile
+			m.loginURL, m.loginFile, m.connecting = msg.LoginURL, msg.LoginFile, false
+		case library.EventConnecting:
+			m.connecting = true
 		case library.EventReady:
-			m.loginURL, m.loginFile, m.playerErr = "", "", nil
+			m.loginURL, m.loginFile, m.playerErr, m.connecting = "", "", nil, false
 		case library.EventFailed:
-			m.playerErr = msg.Err
+			m.playerErr, m.connecting = msg.Err, false
 		}
 		return m, m.rearmEvents()
 

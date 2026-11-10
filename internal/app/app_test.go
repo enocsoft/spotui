@@ -483,3 +483,20 @@ func TestLoginViewKeepsTheWholeURL(t *testing.T) {
 		}
 	}
 }
+
+// TestConnectingStateIsVisible: the callback used to land on a screen that said
+// nothing while the session negotiated, so a slow handshake looked like a dead
+// app. The state must be visible and must hand back to the list once ready.
+func TestConnectingStateIsVisible(t *testing.T) {
+	m := newModel(t, 80, 24)
+	updated, _ := m.Update(playerEventMsg{library.Event{Type: library.EventConnecting}})
+	*m = updated.(Model)
+	if !strings.Contains(m.View(), "starting the session") {
+		t.Errorf("the handshake must be visible, got:\n%s", m.View())
+	}
+	updated, _ = m.Update(playerEventMsg{library.Event{Type: library.EventReady}})
+	*m = updated.(Model)
+	if strings.Contains(m.View(), "starting the session") {
+		t.Errorf("ready must leave the connecting state")
+	}
+}

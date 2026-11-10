@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	librespot "github.com/elxgy/go-librespot"
@@ -22,8 +23,19 @@ type captureLogger struct {
 	onLogin func(url string)
 }
 
-func newCaptureLogger(onLogin func(url string)) *captureLogger {
-	return &captureLogger{w: os.Stderr, onLogin: onLogin}
+func newCaptureLogger(stateDir string, onLogin func(url string)) *captureLogger {
+	w := io.Writer(os.Stderr)
+	// bubbletea owns the screen, so anything written to stderr is invisible while
+	// the TUI runs. Mirror it to a file: a hang during the session bootstrap leaves
+	// no other evidence behind.
+	if stateDir != "" {
+		if err := os.MkdirAll(stateDir, 0o700); err == nil {
+			if f, err := os.OpenFile(filepath.Join(stateDir, "player.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+				w = io.MultiWriter(os.Stderr, f)
+			}
+		}
+	}
+	return &captureLogger{w: w, onLogin: onLogin}
 }
 
 func (l *captureLogger) writef(format string, args ...any) {

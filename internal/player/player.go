@@ -114,6 +114,10 @@ func New(opts Options, content library.DataSource) *Player {
 	}
 }
 
+// bootstrapTimeout bounds the session handshake: a hang must become an error
+// with a log to read, not a frozen screen.
+const bootstrapTimeout = 45 * time.Second
+
 // Start launches the session bootstrap in the background. Progress arrives
 // through Events() as EventLogin / EventReady / EventFailed.
 func (p *Player) Start(ctx context.Context) {
@@ -156,7 +160,7 @@ func (p *Player) emit(ev library.Event) {
 // run owns the login (spec S20), the session bootstrap and then pumps
 // player events until the context dies.
 func (p *Player) run() {
-	log := newCaptureLogger(nil)
+	log := newCaptureLogger(p.authCfg.StateDir, nil)
 
 	// The app owns the login: OAuth Authorization Code + PKCE against
 	// accounts.spotify.com with a local /login callback (spec S20). The
@@ -191,17 +195,24 @@ func (p *Player) run() {
 	// bootstrap, and that exchange has rejected a dashboard client id with a
 	// bare 400 (L20). Do not guess which id the server wants today: try the
 	// configured one, fall back to librespot's default, report what failed.
+	// The token is in hand: say so, or the login screen keeps staring back while
+	// the session bootstrap negotiates.
+	p.emit(library.Event{Type: library.EventConnecting})
+
 	candidates := sessionClientIDs(p.opts.ClientID)
 	var sess *session.Session
 	var bootErr error
 	for i, clientID := range candidates {
-		sess, _, bootErr = sessionconfig.NewSessionFromConfigDir(p.baseCtx, log, sessionconfig.Options{
+		// A bootstrap that never returns is worse than one that fails: bound it.
+		bootCtx, cancel := context.WithTimeout(p.baseCtx, bootstrapTimeout)
+		sess, _, bootErr = sessionconfig.NewSessionFromConfigDir(bootCtx, log, sessionconfig.Options{
 			ConfigDir:    p.opts.ConfigDir,
 			CallbackPort: p.opts.CallbackPort,
 			DeviceType:   "computer",
 			ClientId:     clientID,
 			Credentials:  &session.SpotifyTokenCredentials{Username: tok.UserID, Token: tok.AccessToken},
 		})
+		cancel()
 		if bootErr == nil {
 			break
 		}
@@ -304,7 +315,7 @@ func (p *Player) newGoPlayer() (*libplayer.Player, error) {
 		Spclient:       sess.Spclient(),
 		AudioKey:       sess.AudioKey(),
 		Events:         sess.Events(),
-		Log:            newCaptureLogger(nil),
+		Log:            newCaptureLogger(p.authCfg.StateDir, nil),
 		AudioBackend:   audioBackend,
 		AudioDevice:    sinkID,
 		ExternalVolume: true, // the PulseAudio backend always uses external volume
