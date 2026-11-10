@@ -297,8 +297,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (T26): the player events carry no "track ended" signal, so when the
 		// reported position reaches the duration and radio is on, the boundary
 		// fires — exactly once per track, latched by track id.
+		// R4-001: the tick always re-arms itself. Radio only adds a command on
+		// top; if a resolve goes stale, the tick chain must survive it.
 		if cmd := m.radioCheck(); cmd != nil {
-			return m, cmd
+			return m, tea.Batch(tickCmd(), cmd)
 		}
 		return m, tickCmd()
 

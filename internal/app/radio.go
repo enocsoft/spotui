@@ -61,6 +61,10 @@ func (m *Model) radioCheck() tea.Cmd {
 	if s.Total <= 0 || s.Elapsed < s.Total {
 		return nil
 	}
+	if m.radioFiredID != "" && m.radioFiredID != s.TrackID {
+		// Another track is playing now: the previous latch is spent.
+		m.radioFiredID = ""
+	}
 	if m.radioFiredID == s.TrackID {
 		return nil // this track's boundary already fired
 	}
@@ -92,18 +96,30 @@ func (m *Model) applyRadioResolved(msg radioResolvedMsg) tea.Cmd {
 	if !m.radioOn || m.radioFiredID != msg.trackID {
 		return nil
 	}
+	// R4-002: a resolve can take up to 30s. If the user started something else
+	// meanwhile, this answer is stale and playing it would interrupt them.
+	if s := m.data.Session(); s.TrackID != "" && s.TrackID != msg.trackID {
+		m.radioFiredID = ""
+		return nil
+	}
 	if msg.err != nil {
 		m.radioOn, m.radioUpNext, m.radioFiredID = false, nil, ""
-		return tea.Batch(tickCmd(), m.setToast("✗ radio: "+msg.err.Error()))
+		return m.setToast("✗ radio: " + msg.err.Error())
 	}
 	if len(msg.tracks) == 0 {
 		m.radioOn, m.radioUpNext, m.radioFiredID = false, nil, ""
-		return tea.Batch(tickCmd(), m.setToast("✗ radio: nothing related came back — radio stopped"))
+		return m.setToast("✗ radio: nothing related came back — radio stopped")
 	}
 	next := msg.tracks[0]
 	m.radioUpNext = msg.tracks[1:]
-	cmd := m.playRow(next)
-	return tea.Batch(tickCmd(), cmd)
+	if err := m.player.Play(next); err != nil {
+		// R4-003: a failed play must not leave radio "on" with a queue that will
+		// never sound. Unlatch and stop, naming the reason once.
+		m.radioOn, m.radioUpNext, m.radioFiredID = false, nil, ""
+		return m.setToast("✗ radio: " + err.Error())
+	}
+	m.notePlayed(next.ID)
+	return m.setToast("▶ " + next.Title)
 }
 
 // notePlayed records a successfully played track uri as radio seed history.

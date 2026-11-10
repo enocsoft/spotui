@@ -137,6 +137,22 @@ func runRadioTick(t *testing.T, m *Model) (radioResolvedMsg, bool) {
 	ch := make(chan res, 1)
 	go func() {
 		msg := cmd()
+		// Since R4-001 the boundary returns the resolve batched with the tick, so
+		// the tick chain cannot die with a stale answer. Unwrap it here and ignore
+		// the tick's own message.
+		if batch, is := msg.(tea.BatchMsg); is {
+			for _, sub := range batch {
+				if sub == nil {
+					continue
+				}
+				if rm, ok := sub().(radioResolvedMsg); ok {
+					ch <- res{rm, true}
+					return
+				}
+			}
+			ch <- res{radioResolvedMsg{}, false}
+			return
+		}
 		if rm, is := msg.(radioResolvedMsg); is {
 			ch <- res{rm, true}
 			return
@@ -146,8 +162,8 @@ func runRadioTick(t *testing.T, m *Model) (radioResolvedMsg, bool) {
 	select {
 	case r := <-ch:
 		return r.msg, r.ok
-	case <-time.After(100 * time.Millisecond):
-		return radioResolvedMsg{}, false // the 1 s re-arm tick, not a radio fire
+	case <-time.After(3 * time.Second):
+		return radioResolvedMsg{}, false // no resolve came back
 	}
 }
 
@@ -419,5 +435,92 @@ func TestRadioOffByDefaultNeverFires(t *testing.T) {
 	}
 	if len(rp.calls) != 0 {
 		t.Errorf("radio off must never call the resolver, called %d times", len(rp.calls))
+	}
+}
+
+// R4-001: the state tick must survive a stale resolve. The boundary used to own
+// the tick chain, so a radio toggle mid-flight (or any dropped answer) froze live
+// progress and end-of-track detection until an unrelated keypress.
+func TestRadioStaleResolveKeepsTheTickAlive(t *testing.T) {
+	data := newRadioData()
+	rp := &radioPlayer{data: data, next: []library.Track{
+		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
+	}}
+	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "R")
+	radioAtEnd(data)
+
+	msg, fired := runRadioTick(t, m)
+	if !fired {
+		t.Fatal("the boundary must fire before the resolve can go stale")
+	}
+	press(t, m, "R") // radio off while the answer is in flight
+	updated, _ := m.Update(msg)
+	*m = updated.(Model)
+
+	updated, cmd := m.Update(tickMsg{})
+	*m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("the one-second tick died with the stale resolve")
+	}
+	if len(rp.played) != 0 {
+		t.Errorf("a stale resolve must not play anything, played %d", len(rp.played))
+	}
+}
+
+// R4-002: a resolve can take up to 30s. If the user starts something else in the
+// meantime, the answer is stale and playing it would interrupt them.
+func TestRadioStaleResolveDoesNotInterruptANewTrack(t *testing.T) {
+	const otherID = "0VjIjW4GlUZAMYd2vXMi3b"
+	data := newRadioData()
+	rp := &radioPlayer{data: data, next: []library.Track{
+		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
+	}}
+	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "R")
+	radioAtEnd(data)
+
+	msg, fired := runRadioTick(t, m)
+	if !fired {
+		t.Fatal("the boundary must fire")
+	}
+	// the user starts another track before the answer lands
+	if err := rp.Play(library.Track{ID: otherID, Title: "Something else"}); err != nil {
+		t.Fatalf("manual play failed: %v", err)
+	}
+	updated, _ := m.Update(msg)
+	*m = updated.(Model)
+
+	if len(rp.played) != 1 || rp.played[0].ID != otherID {
+		t.Fatalf("the stale resolve interrupted the user's track: played %v", rp.played)
+	}
+}
+
+// R4-003: if the resolved track cannot play, radio must stop instead of claiming
+// to be on with a queue that will never sound.
+func TestRadioPlayFailureStopsRadio(t *testing.T) {
+	data := newRadioData()
+	rp := &radioPlayer{data: data, rejectedID: realTrackID2, next: []library.Track{
+		{ID: realTrackID2, Title: "Freddie Freeloader", Duration: 100 * time.Second},
+	}}
+	m := newRadioModel(t, 180, 50, data, rp)
+	press(t, m, "R")
+	radioAtEnd(data)
+
+	msg, fired := runRadioTick(t, m)
+	if !fired {
+		t.Fatal("the boundary must fire")
+	}
+	updated, _ := m.Update(msg)
+	*m = updated.(Model)
+
+	if m.radioOn {
+		t.Error("radio must turn off when the resolved track cannot play")
+	}
+	if len(m.radioUpNext) != 0 {
+		t.Errorf("radio must not keep a queue it cannot play: %v", m.radioUpNext)
+	}
+	if !strings.Contains(m.toast.text, "radio") {
+		t.Errorf("the failure must be named, toast = %q", m.toast.text)
 	}
 }
