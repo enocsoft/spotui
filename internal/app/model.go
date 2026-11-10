@@ -78,13 +78,18 @@ type Model struct {
 	cursor       int
 	listOffset   int
 	drawerOpen   bool
-	drillDown    bool // inside the mock playlist (library drill-down)
-	filtering    bool
-	filter       string
+	drillDown    bool   // inside the mock playlist (library drill-down)
+	filter       string // `/` client-side filter of the open list
 	expanded     map[string]bool
-	pickerOpen   bool // audio output picker (`d`)
-	pickerCursor int
 	toast        toast
+
+	// Floating window (S19): one at a time, opened by its key, closed with esc.
+	win          windowKind
+	winCursor    int    // cursor inside the window rows (picker, help)
+	winOffset    int    // first visible window row when rows overflow
+	cmdInput     string // palette command input (`:`)
+	preWinCursor int    // list cursor saved while a window is open
+	preWinOffset int    // list scroll offset saved while a window is open
 }
 
 // New builds the model. data and player are interfaces backed by mock data
@@ -181,52 +186,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.toast = toast{} // any key clears the toast
 
-	if m.pickerOpen {
-		switch msg.String() {
-		case "esc", "d":
-			m.pickerOpen = false
-		case "up", "k":
-			if m.pickerCursor > 0 {
-				m.pickerCursor--
-			}
-		case "down", "j":
-			if m.pickerCursor < len(m.data.Sinks())-1 {
-				m.pickerCursor++
-			}
-		case "enter":
-			return m.onPickSinkCmd()
-		}
-		return m, nil
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
 	}
-
-	if m.filtering {
-		switch msg.String() {
-		case "esc":
-			m.filtering = false
-			m.filter = ""
-			m.clampCursor()
-			return m, nil
-		case "enter":
-			m.filtering = false
-			m.clampCursor()
-			return m, nil
-		case "backspace":
-			if r := []rune(m.filter); len(r) > 0 {
-				m.filter = string(r[:len(r)-1])
-			}
-			m.cursor = 0
-			return m, nil
-		}
-		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-			m.filter += msg.String()
-			m.cursor = 0
-		}
-		return m, nil
+	if m.win != winNone {
+		return m.handleWindowKey(msg)
 	}
 
 	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
 	case "up", "k":
 		m.moveCursor(-1)
 	case "down", "j":
@@ -270,17 +237,161 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "L":
 		return m, m.shiftSections(1)
 	case "/":
-		m.filtering = true
-		m.filter = ""
+		m.openWindow(winSearch)
 	case "d":
-		m.pickerOpen = true
-		m.pickerCursor = 0
+		m.openWindow(winPicker)
 	case ":":
-		m.setToast(": command palette · slice 2")
+		m.openWindow(winPalette)
 	case "?":
-		m.setToast("? all keys · slice 2")
+		m.openWindow(winHelp)
 	}
 	return m, nil
+}
+
+// handleWindowKey routes keys into the open floating window (S19): esc
+// closes it and restores the list; the search input keeps filtering
+// client-side; the palette edits its command; picker and help move the
+// window cursor.
+func (m Model) handleWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.win {
+	case winPicker:
+		switch msg.String() {
+		case "esc", "d":
+			m.closeWindow(true)
+		case "up", "k":
+			m.moveWinCursor(-1)
+		case "down", "j":
+			m.moveWinCursor(1)
+		case "enter":
+			return m.onPickSinkCmd()
+		}
+		return m, nil
+
+	case winHelp:
+		switch msg.String() {
+		case "esc", "?":
+			m.closeWindow(true)
+		case "up", "k":
+			m.moveWinCursor(-1)
+		case "down", "j":
+			m.moveWinCursor(1)
+		}
+		return m, nil
+
+	case winSearch:
+		switch msg.String() {
+		case "esc":
+			m.closeWindow(true) // cancel: restore list and cursor
+		case "enter":
+			m.closeWindow(false) // apply: keep the filter
+			m.clampCursor()
+			m.syncScroll()
+		case "backspace":
+			if r := []rune(m.filter); len(r) > 0 {
+				m.filter = string(r[:len(r)-1])
+			}
+			m.cursor = 0
+			m.winOffset = 0
+		default:
+			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+				m.filter += msg.String()
+				m.cursor = 0
+				m.winOffset = 0
+			}
+		}
+		return m, nil
+
+	case winPalette:
+		switch msg.String() {
+		case "esc":
+			m.closeWindow(true)
+		case "enter":
+			cmd := m.execCommand()
+			m.closeWindow(false)
+			return m, cmd
+		case "backspace":
+			if r := []rune(m.cmdInput); len(r) > 0 {
+				m.cmdInput = string(r[:len(r)-1])
+			}
+		default:
+			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+				m.cmdInput += msg.String()
+			}
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+// openWindow opens the floating window kind, remembering the list state so
+// esc can restore it (S19: the list behind stays put).
+func (m *Model) openWindow(k windowKind) {
+	if m.win == k {
+		m.closeWindow(true)
+		return
+	}
+	m.preWinCursor, m.preWinOffset = m.cursor, m.listOffset
+	m.win = k
+	m.winCursor, m.winOffset = 0, 0
+	switch k {
+	case winSearch:
+		m.filter = ""
+		// keep the cursor row visible inside the window results
+		if area := m.windowRowsArea(); area > 0 && m.cursor >= area {
+			m.winOffset = m.cursor - area + 1
+		}
+	case winPalette:
+		m.cmdInput = ""
+	}
+}
+
+// closeWindow closes the floating window. restore puts the saved list cursor
+// and scroll offset back (esc); otherwise today's state stays (enter).
+func (m *Model) closeWindow(restore bool) {
+	k := m.win
+	m.win = winNone
+	m.winCursor, m.winOffset = 0, 0
+	if restore {
+		m.cursor, m.listOffset = m.preWinCursor, m.preWinOffset
+	}
+	if k == winSearch && restore {
+		m.filter = ""
+	}
+	if k == winPalette {
+		m.cmdInput = ""
+	}
+	m.clampCursor()
+}
+
+// moveWinCursor moves the window cursor (picker, help) and scrolls the
+// window content when it overflows.
+func (m *Model) moveWinCursor(delta int) {
+	n := m.windowRowCount()
+	m.winCursor += delta
+	if m.winCursor < 0 {
+		m.winCursor = 0
+	}
+	if m.winCursor >= n {
+		m.winCursor = n - 1
+	}
+	if m.winCursor < 0 {
+		m.winCursor = 0
+	}
+	m.syncWinScroll()
+}
+
+func (m *Model) syncWinScroll() {
+	area := m.windowRowsArea()
+	if area <= 0 {
+		m.winOffset = 0
+		return
+	}
+	if m.winCursor < m.winOffset {
+		m.winOffset = m.winCursor
+	}
+	if m.winCursor >= m.winOffset+area {
+		m.winOffset = m.winCursor - area + 1
+	}
 }
 
 func (m *Model) setToast(text string) tea.Cmd {

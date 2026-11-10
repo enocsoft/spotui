@@ -114,7 +114,8 @@ func (m Model) visibleDataRows() int {
 
 // View renders the whole frame (T3): section row, context strip, full-screen
 // list, queue drawer, player bar, status bar. Total lines == terminal height.
-// Full-screen player states (login, bootstrap failure) replace the frame.
+// Full-screen player states (login, bootstrap failure) replace the frame. A
+// floating window (S19) overlays the list region without moving it.
 func (m Model) View() string {
 	if m.w < minWidth {
 		return m.refusalView()
@@ -127,11 +128,7 @@ func (m Model) View() string {
 	}
 	var out []string
 	out = append(out, m.topBar(m.w), rule(m.w), m.contextStrip(m.w), rule(m.w))
-	if m.pickerOpen {
-		out = append(out, m.pickerBody(m.listHeight())...)
-	} else {
-		out = append(out, m.listBody(m.listHeight())...)
-	}
+	out = append(out, m.listBody(m.listHeight())...)
 	if m.drawerOpen && m.w >= 100 {
 		out = append(out, rule(m.w), m.drawerHead(m.w))
 		out = append(out, m.drawerRows(m.w)...)
@@ -139,6 +136,9 @@ func (m Model) View() string {
 	out = append(out, rule(m.w))
 	out = append(out, m.playerBar(m.w)...)
 	out = append(out, m.statusBar(m.w))
+	if m.win != winNone {
+		m.overlayWindow(out)
+	}
 	return strings.Join(out, "\n")
 }
 
@@ -421,40 +421,6 @@ func (m Model) drawerRows(w int) []string {
 	return out
 }
 
-// pickerBody renders the audio output picker in the list region: label, one
-// row per local sink (● active / ○ idle), footer with keys. Slice 1 renders
-// it in place of the list; slice 2 lifts it into the floating surface panel.
-func (m Model) pickerBody(h int) []string {
-	sinks := m.data.Sinks()
-	out := []string{" " + theme.LabelStyle.Render("AUDIO OUTPUT"), ""}
-	if len(sinks) == 0 {
-		out = append(out, " "+theme.ValueStyle.Render(theme.GlyphIdle+" no audio output"), "")
-	}
-	for i, sk := range sinks {
-		glyph := theme.GlyphIdle
-		if sk.Active {
-			glyph = theme.GlyphActive
-		}
-		state := ""
-		if sk.Active {
-			state = " · active"
-		} else if sk.Blocked != "" {
-			state = " · " + sk.Blocked
-		}
-		text := fmt.Sprintf(" %s %s%s", glyph, sk.Name, state)
-		if i == m.pickerCursor {
-			out = append(out, theme.SelectedStyle.Width(m.w).Render(truncate(text, m.w)))
-		} else {
-			out = append(out, theme.ValueStyle.Render(truncate(text, m.w)))
-		}
-	}
-	out = append(out, "", " "+theme.LabelStyle.Render("enter select · esc close"))
-	for len(out) < h {
-		out = append(out, "")
-	}
-	return out
-}
-
 // playerBar: 2 rows at ≥100 columns, 1 row below (DESIGN §4 player states).
 func (m Model) playerBar(w int) []string {
 	s := m.data.Session()
@@ -568,13 +534,14 @@ func (m Model) volumeCell(vol int) string {
 }
 
 // statusBar: contextual keys left (artboard order), view state + clock right
-// (Keys-Once Rule). A toast replaces the keys line.
+// (Keys-Once Rule). A toast replaces the keys line; the search window keeps
+// the live filter indicator here.
 func (m Model) statusBar(w int) string {
 	right := theme.ValueStyle.Render(m.viewState()) + "   " + theme.NumberStyle.Render(m.clock().Format("15:04"))
 	rw := visibleWidth(right)
 	var left string
 	switch {
-	case m.filtering:
+	case m.win == winSearch:
 		left = theme.AccentStyle.Render("/ "+truncate(m.filter, w/2)) + "   " +
 			theme.LabelStyle.Render("enter apply · esc cancel")
 	case m.toast.text != "":
@@ -589,14 +556,9 @@ func (m Model) statusBar(w int) string {
 }
 
 func (m Model) keyHints(maxWidth int) string {
-	hints := [][2]string{
-		{"j/k", "move"}, {"enter", "play"}, {"a", "queue"}, {"space", "pause"},
-		{"n/p", "track"}, {"+/-", "volume"}, {"tab", "view"}, {"q", "drawer"},
-		{"esc", "back"}, {"/", "search"}, {":", "cmd"}, {"d", "output"},
-	}
 	var parts []string
 	total := 0
-	for _, h := range hints {
+	for _, h := range keyHintsTable {
 		part := theme.ValueStyle.Render(h[0]) + " " + theme.LabelStyle.Render(h[1])
 		if total+visibleWidth(part)+3*len(parts) > maxWidth && len(parts) > 0 {
 			break

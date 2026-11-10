@@ -168,20 +168,6 @@ func TestTabCyclesSections(t *testing.T) {
 	}
 }
 
-// TestUnimplementedActionsToast: `:` and `?` report a one-line toast
-// instead of panicking or doing nothing. (`d` has a real picker since the
-// local-player pivot.)
-func TestUnimplementedActionsToast(t *testing.T) {
-	m := newModel(t, 180, 50)
-	for _, key := range []string{":", "?"} {
-		press(t, m, key)
-		status := stripANSI(lines(m)[49])
-		if !strings.Contains(status, "slice 2") {
-			t.Errorf("key %q should show a one-line toast mentioning slice 2, got %q", key, status)
-		}
-	}
-}
-
 // TestFilterNarrowsList: `/` filters the current list live and esc restores it.
 func TestFilterNarrowsList(t *testing.T) {
 	m := newModel(t, 180, 50)

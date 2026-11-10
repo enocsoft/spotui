@@ -242,20 +242,46 @@ func (m Model) onPickSinkCmd() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// onPickSink selects the audio output under the picker cursor (local-player
-// pivot: `d` picks a local sink, never a remote device).
+// onPickSink selects the audio output under the picker window cursor
+// (local-player pivot: `d` picks a local sink, never a remote device).
 func (m *Model) onPickSink() tea.Cmd {
 	sinks := m.data.Sinks()
-	if m.pickerCursor < 0 || m.pickerCursor >= len(sinks) {
-		m.pickerOpen = false
+	if m.winCursor < 0 || m.winCursor >= len(sinks) {
+		m.closeWindow(false)
 		return m.setToast("no audio output selected")
 	}
-	sink := sinks[m.pickerCursor]
+	sink := sinks[m.winCursor]
 	if err := m.data.SetSink(sink.Name); err != nil {
 		return m.setToast("✗ " + err.Error())
 	}
-	m.pickerOpen = false
+	m.closeWindow(false)
 	return m.setToast("output · " + sink.Name)
+}
+
+// execCommand runs the palette input (T13). `:play` validates its target
+// before touching the player so invalid input never reaches librespot;
+// unknown commands keep the one-line toast behaviour.
+func (m *Model) execCommand() tea.Cmd {
+	raw := strings.TrimSpace(m.cmdInput)
+	if raw == "" {
+		return m.setToast(": type a command · :play <spotify track uri or id>")
+	}
+	name, rest := raw, ""
+	if i := strings.IndexAny(raw, " \t"); i >= 0 {
+		name, rest = raw[:i], strings.TrimSpace(raw[i+1:])
+	}
+	switch name {
+	case "play", ":play":
+		id, err := library.ParseTrackID(rest)
+		if err != nil {
+			return m.setToast("✗ :play expects a spotify:track: URI or a 22-char track id")
+		}
+		if err := m.player.Play(library.Track{ID: id}); err != nil {
+			return m.setToast("✗ " + err.Error())
+		}
+		return m.setToast("▶ " + id)
+	}
+	return m.setToast(": unknown command " + name)
 }
 
 func (m *Model) shiftSections(delta int) tea.Cmd {

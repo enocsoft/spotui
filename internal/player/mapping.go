@@ -4,7 +4,6 @@ package player
 
 import (
 	"fmt"
-	"strings"
 
 	libplayer "github.com/elxgy/go-librespot/player"
 
@@ -66,18 +65,12 @@ func LoginCallbackURL(port int) string {
 	return fmt.Sprintf("http://127.0.0.1:%d/login", port)
 }
 
-// ParseSpotifyTrackID accepts a bare 22-char base62 track id or a full
-// spotify:track: URI and returns the bare id. Anything else (mock row ids,
-// other Spotify object types) is rejected so it can never reach the player.
+// ParseSpotifyTrackID validates a track id for playback: a bare 22-char
+// base62 track id or a full spotify:track: URI. The parse is domain logic
+// shared with the palette (`:play`), so it lives in library.
 func ParseSpotifyTrackID(id string) (string, error) {
-	id = strings.TrimPrefix(id, "spotify:track:")
-	if len(id) != trackIDLen || strings.Trim(id, base62) != "" {
-		return "", fmt.Errorf("not a Spotify track id: %q", id)
-	}
-	return id, nil
+	return library.ParseTrackID(id)
 }
-
-const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 // SortSinks orders sinks for the picker: the active sink first, blocked
 // sinks last, alphabetical in between. The input slice is not mutated.

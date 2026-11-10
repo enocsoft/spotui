@@ -7,7 +7,11 @@
 // no remote Connect devices and no transfer-to-device step.
 package library
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Track is one row in a list: a playlist, search results or the queue.
 type Track struct {
@@ -123,4 +127,24 @@ type Event struct {
 // relays the channel into bubbletea messages.
 type PlayerEvents interface {
 	Events() <-chan Event
+}
+
+// trackIDLen is the length of a base62 Spotify track id.
+const trackIDLen = 22
+
+const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+// ParseTrackID accepts a bare 22-char base62 Spotify track id or a full
+// spotify:track: URI, stripping surrounding whitespace and quotes, and
+// returns the bare id. Anything else (mock row ids, other Spotify object
+// types) is rejected so it can never reach the player (T13, spec S1).
+func ParseTrackID(target string) (string, error) {
+	t := strings.TrimSpace(target)
+	t = strings.Trim(t, "\"'`")
+	t = strings.TrimSpace(t)
+	t = strings.TrimPrefix(t, "spotify:track:")
+	if len(t) != trackIDLen || strings.Trim(t, base62) != "" {
+		return "", fmt.Errorf("not a Spotify track id: %q", target)
+	}
+	return t, nil
 }
