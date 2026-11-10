@@ -75,8 +75,17 @@ func (m Model) playlistsCmd(offset int) tea.Cmd {
 
 func (m Model) itemsCmd(id string, offset int) tea.Cmd {
 	f := m.fetch
+	isAlbum := m.plIsAlbum // the open list decides which resolver path serves it
 	return func() tea.Msg {
-		page, err := f.Items(context.Background(), id, offset)
+		var (
+			page library.ItemsPage
+			err  error
+		)
+		if isAlbum {
+			page, err = f.AlbumItems(context.Background(), id, offset)
+		} else {
+			page, err = f.Items(context.Background(), id, offset)
+		}
 		return itemsMsg{plID: id, offset: offset, page: page, err: err}
 	}
 }
@@ -287,11 +296,12 @@ func (m *Model) openPlaylist(s library.PlaylistSummary) tea.Cmd {
 	m.section = SectionTracks
 	m.sView = false
 	m.cursor, m.listOffset = 0, 0
-	if m.plID == s.ID && (len(m.plTracks) > 0 || m.plItemsErr != nil || m.plSkipped > 0) {
+	if m.plID == s.ID && !m.plIsAlbum && (len(m.plTracks) > 0 || m.plItemsErr != nil || m.plSkipped > 0) {
 		return nil
 	}
 	m.plID, m.plName, m.plOwner = s.ID, s.Name, s.Owner
 	m.plPrivate, m.plCollab = s.Private, s.Collaborative
+	m.plIsAlbum, m.plArtist = false, ""
 	m.plTracks, m.plItemsErr = nil, nil
 	m.plTotal, m.plNext = s.TrackCount, -1
 	m.plSkipped, m.plTruncated = 0, false
@@ -301,6 +311,30 @@ func (m *Model) openPlaylist(s library.PlaylistSummary) tea.Cmd {
 	m.plItemsLoading, m.iPending = true, 0
 	m.rebuildShuffle() // the view changed: the old permutation is void
 	return m.itemsCmd(s.ID, 0)
+}
+
+// openAlbum drills into a search-result album (T22): the same drill-down a
+// playlist gets — the resolver serves spotify:album:<id> with no Web API
+// quota and no owner restriction, so the albums in the search results open,
+// too. Cached contents are kept the way openPlaylist keeps them. An album
+// has no owner, no privacy and no count the resolver reports, so none of
+// those facts is invented: the total comes from the resolve itself.
+func (m *Model) openAlbum(a library.AlbumSummary) tea.Cmd {
+	m.section = SectionTracks
+	m.sView = false
+	m.cursor, m.listOffset = 0, 0
+	if m.plID == a.ID && m.plIsAlbum && (len(m.plTracks) > 0 || m.plItemsErr != nil || m.plSkipped > 0) {
+		return nil
+	}
+	m.plID, m.plName, m.plArtist = a.ID, a.Name, a.Artist
+	m.plIsAlbum = true
+	m.plOwner, m.plPrivate, m.plCollab = "", false, false
+	m.plTracks, m.plItemsErr = nil, nil
+	m.plTotal, m.plNext = 0, -1
+	m.plSkipped, m.plTruncated = 0, false
+	m.plItemsLoading, m.iPending = true, 0
+	m.rebuildShuffle() // the view changed: the old permutation is void
+	return m.itemsCmd(a.ID, 0)
 }
 
 // startSearch runs (or re-runs) a query: one capped request at offset 0.
@@ -461,8 +495,18 @@ func (m Model) appendPlaylistStatus(rows []row, n int) []row {
 		return append(rows, row{kind: rowStatus, st: stInfo,
 			text: theme.GlyphIdle + fmt.Sprintf(" %d entries not playable · local files or episodes", m.plSkipped)})
 	default:
-		return append(rows, row{kind: rowStatus, st: stEmpty, text: theme.GlyphIdle + " this playlist has no tracks"})
+		return append(rows, row{kind: rowStatus, st: stEmpty,
+			text: theme.GlyphIdle + " this " + m.emptyCollectionWord() + " has no tracks"})
 	}
+}
+
+// emptyCollectionWord says which kind of list is open: album or playlist —
+// the empty state names the truth, never a playlist pretending to be one.
+func (m Model) emptyCollectionWord() string {
+	if m.plIsAlbum {
+		return "album"
+	}
+	return "playlist"
 }
 
 // searchResultRows is the transient results view (T19): type-grouped,
@@ -491,7 +535,7 @@ func (m Model) searchResultRows() []row {
 	if len(m.sAlbums) > 0 {
 		rows = append(rows, row{kind: rowHeader, text: "ALBUMS", count: len(m.sAlbums)})
 		for _, a := range m.sAlbums {
-			rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: a.Artist})
+			rows = append(rows, row{kind: rowAlbumItem, text: a.Name, meta: a.Artist, al: a})
 		}
 	}
 	if len(m.sPlaylists) > 0 {

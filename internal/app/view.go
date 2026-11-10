@@ -340,6 +340,20 @@ func (m Model) realContextStrip(w int) string {
 	case m.section == SectionTracks && m.plID == "":
 		left = theme.TitleStyle.Render("tracks")
 		right = theme.MetaStyle.Render("no playlist open")
+	case m.section == SectionTracks && m.plIsAlbum:
+		// The open list is a search-result album (T22): the strip names the
+		// album and its artist — the facts the search summary carries. There
+		// is no owner, privacy or year to invent.
+		left = theme.LabelStyle.Render("albums") + " " + theme.GlyphCrumb + " " +
+			theme.TitleStyle.Render(truncate(m.plName, w/3)) + "  " +
+			theme.MetaStyle.Render(m.plArtist)
+		right = theme.MetaStyle.Render("tracks")
+		if m.plTotal > 0 {
+			right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks", m.plTotal))
+		}
+		if m.plNext < 0 && m.plItemsErr == nil && len(m.plTracks) > 0 {
+			right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s", m.plTotal, fmtTotal(totalDuration(m.plTracks))))
+		}
 	case m.section == SectionTracks:
 		left = theme.LabelStyle.Render("playlists") + " " + theme.GlyphCrumb + " " +
 			theme.TitleStyle.Render(truncate(m.plName, w/3)) + "  " +

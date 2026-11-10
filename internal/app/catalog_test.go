@@ -17,6 +17,7 @@ import (
 	"github.com/nahuel/spotify-tui/internal/config"
 	"github.com/nahuel/spotify-tui/internal/library"
 	"github.com/nahuel/spotify-tui/internal/library/mock"
+	"github.com/nahuel/spotify-tui/internal/ui/theme"
 )
 
 const (
@@ -28,11 +29,12 @@ const (
 
 // stubFetch records every catalog call and serves canned pages/errors.
 type stubFetch struct {
-	playlistsFn func(offset int) (library.PlaylistPage, error)
-	itemsFn     func(id string, offset int) (library.ItemsPage, error)
-	searchFn    func(query string, offset int) (library.SearchPage, error)
-	savedFn     func(id string, saved bool) error
-	calls       []string
+	playlistsFn  func(offset int) (library.PlaylistPage, error)
+	itemsFn      func(id string, offset int) (library.ItemsPage, error)
+	albumItemsFn func(id string, offset int) (library.ItemsPage, error)
+	searchFn     func(query string, offset int) (library.SearchPage, error)
+	savedFn      func(id string, saved bool) error
+	calls        []string
 }
 
 func (f *stubFetch) Playlists(ctx context.Context, offset int) (library.PlaylistPage, error) {
@@ -43,6 +45,11 @@ func (f *stubFetch) Playlists(ctx context.Context, offset int) (library.Playlist
 func (f *stubFetch) Items(ctx context.Context, id string, offset int) (library.ItemsPage, error) {
 	f.calls = append(f.calls, fmt.Sprintf("items %s %d", id, offset))
 	return f.itemsFn(id, offset)
+}
+
+func (f *stubFetch) AlbumItems(ctx context.Context, id string, offset int) (library.ItemsPage, error) {
+	f.calls = append(f.calls, fmt.Sprintf("albumItems %s %d", id, offset))
+	return f.albumItemsFn(id, offset)
 }
 
 func (f *stubFetch) Search(ctx context.Context, query string, offset int) (library.SearchPage, error) {
@@ -678,12 +685,18 @@ func TestSearchListEscReturnsFromResults(t *testing.T) {
 }
 
 // TestSearchEnterOnResultsActs: a track plays, a playlist opens its tracks,
-// and an album honestly says it does not open — without leaving the results.
+// and an album opens its tracks too (T22) — the results view acts on every
+// row kind.
 func TestSearchEnterOnResultsActs(t *testing.T) {
 	f := &stubFetch{
 		itemsFn: func(id string, offset int) (library.ItemsPage, error) {
 			return library.ItemsPage{Tracks: []library.Track{
 				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+			}, Total: 1, NextOffset: -1}, nil
+		},
+		albumItemsFn: func(id string, offset int) (library.ItemsPage, error) {
+			return library.ItemsPage{Tracks: []library.Track{
+				{ID: realTrackID2, Title: "Freddie Freeloader", Artist: "Miles Davis", Album: "Kind of Blue"},
 			}, Total: 1, NextOffset: -1}, nil
 		},
 	}
@@ -704,29 +717,44 @@ func TestSearchEnterOnResultsActs(t *testing.T) {
 		t.Errorf("playing a result must not switch the section or leave the results: %v/%v", m.section, m.sView)
 	}
 
-	pressRun(t, m, "j") // onto track 2
-	pressRun(t, m, "j") // onto the ALBUMS header
-	pressRun(t, m, "j") // onto the album row
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	*m = updated.(Model)
-	if got := stripANSI(lines(m)[49]); !strings.Contains(got, "albums do not open") {
-		t.Errorf("an album result must say honestly that it does not open, got %q", got)
-	}
-	if m.section != SectionPlaylists || !m.sView {
-		t.Errorf("an unopenable album must not move the user: %v/%v", m.section, m.sView)
-	}
-
 	pressRun(t, m, "j") // PLAYLISTS header
-	pressRun(t, m, "j") // playlist row
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j") // onto the playlist row
 	pressRun(t, m, "enter")
-	if m.section != SectionTracks {
-		t.Errorf("enter on a playlist result must open its tracks, section = %v", m.section)
-	}
-	if m.sView {
-		t.Error("opening the playlist leaves the results view")
+	if m.section != SectionTracks || m.sView {
+		t.Errorf("enter on a playlist result must open its tracks, section = %v sView = %v", m.section, m.sView)
 	}
 	if got := stripANSI(m.View()); !strings.Contains(got, "So What") {
 		t.Errorf("the playlist contents should be on screen, got:\n%s", got)
+	}
+
+	// esc back to the navigation, re-run the search under a fresh query (the
+	// debounce skips a repeated query), and open the album: enter on a
+	// playlist already left the results, so the album ride needs its own pass
+	// (T22).
+	pressKey(t, m, tea.KeyEsc)
+	press(t, m, "/")
+	typeSearch(t, m, "rainy")
+	pressKey(t, m, tea.KeyEnter)
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j") // onto the album row
+	pressRun(t, m, "enter")
+	if m.section != SectionTracks || m.sView {
+		t.Errorf("enter on an album result must open its tracks, section = %v sView = %v", m.section, m.sView)
+	}
+	if got := stripANSI(m.View()); !strings.Contains(got, "Freddie Freeloader") {
+		t.Errorf("the album contents should be on screen, got:\n%s", got)
+	}
+	joined := strings.Join(f.calls, ",")
+	if !strings.Contains(joined, "albumItems al1 0") {
+		t.Errorf("the album must open through the album resolver path, made [%s]", joined)
+	}
+	if strings.Contains(joined, "items al1") {
+		t.Errorf("the playlist items path must not fire for an album, made [%s]", joined)
 	}
 }
 
@@ -763,6 +791,113 @@ func TestSearchRateLimitRowInResults(t *testing.T) {
 	}
 	if got := stripANSI(m.View()); !strings.Contains(got, "So What") {
 		t.Errorf("the retried results should render, got:\n%s", got)
+	}
+}
+
+// --- T22: an album row opens its tracks through the resolver ---
+
+// An album row in the search results opens its tracks like a playlist: the
+// view switches to the track list, the context strip names the album and its
+// artist, and the tracks ride the album resolver path (no Web API items).
+func TestSearchAlbumRowOpensItsTracks(t *testing.T) {
+	f := &stubFetch{
+		albumItemsFn: func(id string, offset int) (library.ItemsPage, error) {
+			if id != "al1" || offset != 0 {
+				return library.ItemsPage{}, errors.New("unexpected album items request")
+			}
+			return library.ItemsPage{Tracks: []library.Track{
+				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue"},
+			}, Total: 1, NextOffset: -1}, nil
+		},
+	}
+	searchGroupFixtures(f)
+	m, pl := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	pressKey(t, m, tea.KeyEnter) // close the window on the results
+
+	// rows: TRACKS header, 2 tracks, ALBUMS header, album, PLAYLISTS header, playlist
+	pressRun(t, m, "j") // onto track 1
+	pressRun(t, m, "j") // track 2
+	pressRun(t, m, "j") // ALBUMS header
+	pressRun(t, m, "j") // onto the album row
+	pressRun(t, m, "enter")
+
+	if m.section != SectionTracks || m.sView {
+		t.Fatalf("enter on an album row must open its tracks on the Tracks view, section=%v sView=%v", m.section, m.sView)
+	}
+	got := stripANSI(m.View())
+	if !strings.Contains(got, "So What") {
+		t.Errorf("the open album must render its tracks, got:\n%s", got)
+	}
+	if strings.Contains(got, "albums do not open") {
+		t.Errorf("the honest-not-yet toast is gone: album rows open now, got:\n%s", got)
+	}
+
+	// The strip names the album and its artist with the albums crumb.
+	strip := stripANSI(lines(m)[2])
+	wantCrumb := "albums " + theme.GlyphCrumb + " Kind of Blue"
+	if !strings.Contains(strip, wantCrumb) || !strings.Contains(strip, "Miles Davis") {
+		t.Errorf("the context strip must name the album and its artist (crumb albums), got %q", strip)
+	}
+	if strings.Contains(strip, "private") || strings.Contains(strip, "public") {
+		t.Errorf("an album has no owner/privacy fact to show, strip = %q", strip)
+	}
+
+	// The album's tracks came through the album path, not the playlist one.
+	joined := strings.Join(f.calls, ",")
+	if !strings.Contains(joined, "albumItems al1 0") {
+		t.Errorf("opening an album must ride the album resolver path, made [%s]", joined)
+	}
+	if strings.Contains(joined, "items al1") {
+		t.Errorf("the playlist items path must not be hit for an album, made [%s]", joined)
+	}
+
+	// enter on a row of the open album plays it, like a playlist's rows do.
+	pressRun(t, m, "enter")
+	if len(pl.played) != 1 || pl.played[0].ID != realTrackID {
+		t.Errorf("enter on an album track must play it, played %+v", pl.played)
+	}
+}
+
+// A resolver failure on an album shows the reason in the error state in
+// place — never an empty table, never a success.
+func TestSearchAlbumResolveErrorSurfacesTheReason(t *testing.T) {
+	f := &stubFetch{
+		albumItemsFn: func(id string, offset int) (library.ItemsPage, error) {
+			return library.ItemsPage{}, errors.New("invalid status code from context resolve: 502")
+		},
+	}
+	searchGroupFixtures(f)
+	m, _ := newRealModel(t, 180, 50, f)
+	press(t, m, "/")
+	typeSearch(t, m, "rain")
+	pressKey(t, m, tea.KeyEnter)
+
+	// rows: TRACKS header (0), So What (1), Blue in Green (2), ALBUMS header (3), album (4)
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "j")
+	pressRun(t, m, "enter")
+
+	got := stripANSI(m.View())
+	if m.section != SectionTracks {
+		t.Fatalf("the album view is the Tracks view, section = %v", m.section)
+	}
+	if !strings.Contains(got, "✗ could not load") || !strings.Contains(got, "502") {
+		t.Errorf("a failed album resolve must show the reason in the error state, got:\n%s", got)
+	}
+	if len(m.plTracks) != 0 {
+		t.Errorf("a failed resolve must not land track rows, tracks = %+v", m.plTracks)
+	}
+	// The only "So What" the frame may show is the (mock) player bar — never
+	// a track row in the list.
+	for _, line := range lines(m) {
+		plain := stripANSI(line)
+		if strings.Contains(plain, "So What") && !strings.Contains(plain, "192 kbps") {
+			t.Errorf("a failed resolve must not render the album's tracks in the list, found %q", plain)
+		}
 	}
 }
 
@@ -862,10 +997,17 @@ func TestCatalogViewFitsTerminal(t *testing.T) {
 				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue", Duration: 562000000000},
 			}, Total: 1, NextOffset: -1}, nil
 		},
+		albumItemsFn: func(id string, offset int) (library.ItemsPage, error) {
+			return library.ItemsPage{Tracks: []library.Track{
+				{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue", Duration: 562000000000},
+			}, Total: 1, NextOffset: -1}, nil
+		},
 		searchFn: func(query string, offset int) (library.SearchPage, error) {
 			return library.SearchPage{
 				Query: query, Tracks: []library.Track{
 					{ID: realTrackID, Title: "So What", Artist: "Miles Davis", Album: "Kind of Blue", Duration: 562000000000},
+				}, Albums: []library.AlbumSummary{
+					{ID: "al1", Name: "Kind of Blue — a very long album name that must truncate in the strip", Artist: "Miles Davis Quintet Sextet Orchestra"},
 				}, Totals: library.SearchTotals{Tracks: 87}, NextOffset: -1,
 			}, nil
 		},
@@ -904,6 +1046,13 @@ func TestCatalogViewFitsTerminal(t *testing.T) {
 		check("search window with results")
 		pressKey(t, m, tea.KeyEnter) // close the window on the results
 		check("search results view")
+		// the album result opens too: its strip must respect the same budget
+		pressRun(t, m, "j")
+		pressRun(t, m, "j")
+		pressRun(t, m, "j") // onto the album row
+		pressRun(t, m, "enter")
+		check("album view")
+		pressKey(t, m, tea.KeyEsc)
 		pressKey(t, m, tea.KeyEsc)
 
 		// the sections toggle and the drawer coexists (no Queue section any more)

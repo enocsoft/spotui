@@ -271,3 +271,51 @@ func TestItemsWithoutResolverIsAnError(t *testing.T) {
 		t.Fatal("Items without a wired resolver must be an error, not a silent empty page")
 	}
 }
+
+// T22: albums are the second caller of the same resolver — the exact context
+// uri is spotify:album:<id> (no Web API quota, no owner restriction), and the
+// mapping/mapping skip/truncation logic is the playlist path's, not a copy.
+func TestAlbumItemsViaResolverUsesTheExactAlbumUri(t *testing.T) {
+	r := &fakeResolver{ctx: &connectpb.Context{
+		Pages: []*connectpb.ContextPage{ctxPage(
+			&connectpb.ContextTrack{Uri: "spotify:track:4uLU6hMCjMI75M1A2tKUQC", Metadata: map[string]string{
+				"title": "So What", "artist_name": "Miles Davis", "album_name": "Kind of Blue", "duration": "562000",
+			}},
+			&connectpb.ContextTrack{Uri: "spotify:local:The+Beatles:Let+It+Be:96:320", Metadata: nil},
+		)},
+	}}
+	page, err := resolverAPI(r, nil).AlbumItems(context.Background(), "al1", 0)
+	if err != nil {
+		t.Fatalf("AlbumItems via resolver: %v", err)
+	}
+	if got, want := strings.Join(r.uris, ","), "spotify:album:al1"; got != want {
+		t.Errorf("resolver uris = %q, want exactly spotify:album:<id>", got)
+	}
+	if len(page.Tracks) != 1 || page.Tracks[0].ID != "4uLU6hMCjMI75M1A2tKUQC" ||
+		page.Tracks[0].Title != "So What" || page.Tracks[0].Artist != "Miles Davis" ||
+		page.Tracks[0].Album != "Kind of Blue" || page.Tracks[0].Duration != 562000*time.Millisecond {
+		t.Errorf("album tracks = %+v, want the context metadata mapped", page.Tracks)
+	}
+	if page.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1 — the unplayable entry is counted, not dropped", page.Skipped)
+	}
+	if page.NextOffset != -1 {
+		t.Errorf("NextOffset = %d, want -1: the resolver set is bounded", page.NextOffset)
+	}
+}
+
+// A resolver failure on an album is an error state carrying the reason,
+// never an empty table pretending the album has no tracks.
+func TestAlbumItemsViaResolverErrorSurfacesTheReason(t *testing.T) {
+	r := &fakeResolver{err: errors.New("invalid status code from context resolve: 502")}
+	page, err := resolverAPI(r, nil).AlbumItems(context.Background(), "al1", 0)
+	if err == nil {
+		t.Fatalf("a resolver failure must be an error, got page %+v", page)
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Errorf("the error should carry the resolver's reason, got %q", err.Error())
+	}
+	if len(page.Tracks) != 0 {
+		t.Errorf("a failed resolve must not return rows, got %+v", page.Tracks)
+	}
+}

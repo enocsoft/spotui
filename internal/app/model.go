@@ -107,11 +107,15 @@ type Model struct {
 	plsTotal   int
 	plsNext    int // offset of the next page, -1 when exhausted
 
-	// Focused playlist contents (drill-down), resolved through the playback
+	// Focused playlist/album contents (drill-down), resolved through the playback
 	// resolver (library/context.go). plSkipped/plTruncated carry what the
 	// bounded resolver could not show, footnoted under the list — never a
-	// silent drop and never a playlist pretended complete.
+	// silent drop and never a playlist pretended complete. plIsAlbum marks the
+	// open list as a search-result album (T22): the strip names artist, not
+	// owner · privacy, and contents rides the album resolver path.
 	plID, plName, plOwner string
+	plArtist              string
+	plIsAlbum             bool
 	plPrivate, plCollab   bool
 	plTracks              []library.Track
 	plTotal               int

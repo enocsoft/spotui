@@ -179,7 +179,7 @@ func (w *WebAPI) Playlists(ctx context.Context, offset int) (PlaylistPage, error
 	return page, nil
 }
 
-// --- playlist contents via the playback resolver ---
+// --- playlist and album contents via the playback resolver ---
 
 // Items resolves the playlist's contents the way playback does
 // (sess.Spclient().ContextResolve, no Web API quota, no owner restriction.
@@ -187,7 +187,15 @@ func (w *WebAPI) Playlists(ctx context.Context, offset int) (PlaylistPage, error
 // it answered 403 for a playlist the user does not own (spec S14) and no
 // fallback uses it any more.
 func (w *WebAPI) Items(ctx context.Context, playlistID string, offset int) (ItemsPage, error) {
-	return itemsViaContext(ctx, playlistID, offset, w.resolve, w.batch)
+	return itemsViaContext(ctx, contextURI("playlist", playlistID), offset, w.resolve, w.batch)
+}
+
+// AlbumItems resolves a search-result album's tracks through the same
+// resolver — the context uri is spotify:album:<id> (T22). Mapping, skipped
+// counts and the bounded-resolve truncation are the playlist path's own
+// (context.go): there is no second implementation.
+func (w *WebAPI) AlbumItems(ctx context.Context, albumID string, offset int) (ItemsPage, error) {
+	return itemsViaContext(ctx, contextURI("album", albumID), offset, w.resolve, w.batch)
 }
 
 // --- GET /v1/search ---

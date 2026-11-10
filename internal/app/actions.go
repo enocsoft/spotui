@@ -15,7 +15,7 @@ type rowKind int
 const (
 	rowHeader rowKind = iota
 	rowPlaylistItem
-	rowAlbumItem // a search-result album: named honestly, it does not open yet
+	rowAlbumItem // a search-result album: opens its tracks on enter (T22)
 	rowTrack
 	rowStatus // loading / empty / error / rate-limit panel state
 )
@@ -36,6 +36,7 @@ type row struct {
 	hint string
 	st   statusKind
 	pl   library.PlaylistSummary
+	al   library.AlbumSummary // real catalog rows (T22): album rows carry their summary so `enter` can drill into them
 }
 
 // currentTrack resolves the now-playing track. The real player reports the
@@ -135,8 +136,8 @@ func (m *Model) onEnter() tea.Cmd {
 	}
 	r := rows[m.cursor]
 	// The results view acts on its rows without ever switching the section
-	// row: a track plays, a playlist opens its tracks, an album names the
-	// limit honestly (T19: there is no album-contents path yet).
+	// row: a track plays, a playlist opens its tracks, an album opens its
+	// tracks too (T22) — every row below the cursor acts.
 	if m.sView {
 		switch r.kind {
 		case rowTrack:
@@ -144,7 +145,7 @@ func (m *Model) onEnter() tea.Cmd {
 		case rowPlaylistItem:
 			return m.openPlaylist(r.pl)
 		case rowAlbumItem:
-			return m.setToast("○ albums do not open · search a track or playlist")
+			return m.openAlbum(r.al)
 		default:
 			return m.setToast("enter · nothing to open here")
 		}

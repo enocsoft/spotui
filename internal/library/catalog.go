@@ -87,6 +87,10 @@ type Fetch interface {
 	// playback session (no Web API quota, no owner restriction). The set is
 	// bounded; Skipped/Truncated state the parts it could not show.
 	Items(ctx context.Context, playlistID string, offset int) (ItemsPage, error)
+	// AlbumItems returns one slice of an album's tracks through the same
+	// context resolver (spotify:album:<id>): the second caller of the same
+	// bounded resolve (T22).
+	AlbumItems(ctx context.Context, albumID string, offset int) (ItemsPage, error)
 	// Search queries tracks, albums and playlists (limit cap 10).
 	Search(ctx context.Context, query string, offset int) (SearchPage, error)
 	// SetSaved toggles the saved state through the generic 2026 endpoints.

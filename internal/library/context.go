@@ -35,25 +35,40 @@ type ContextResolver func(ctx context.Context, uri string) (*connectpb.Context, 
 // leaves missing names empty.
 type MetadataBatch func(ctx context.Context, uris []string) (map[string]spclient.ResolvedEntry, error)
 
-// playlistContextURI builds the context uri the resolver expects.
-func playlistContextURI(playlistID string) string {
-	return "spotify:playlist:" + playlistID
+// contextURI builds the context uri the resolver expects, one spelling for
+// every kind the resolver accepts: "spotify:playlist:<id>" (the playlist
+// drill-down) and "spotify:album:<id>" (a search-result album, T22).
+func contextURI(kind, id string) string {
+	return "spotify:" + kind + ":" + id
 }
 
-// itemsViaContext resolves the playlist context once and maps every playable
-// entry to the track model. offset slices the resolved set locally — the
-// resolver is bounded, so there is only ever one real page and NextOffset is
-// -1: the UI must never wait for a second context resolve that will not come.
-func itemsViaContext(ctx context.Context, playlistID string, offset int, resolve ContextResolver, batch MetadataBatch) (ItemsPage, error) {
+// contextLabel names a context uri back for error messages: the kind and the
+// id, just as they ride the uri ("playlist pl2", "album al1"). An unknown
+// spelling falls back to the uri itself — the error never invents a kind.
+func contextLabel(uri string) string {
+	rest := strings.TrimPrefix(uri, "spotify:")
+	if i := strings.IndexByte(rest, ':'); i >= 0 {
+		return rest[:i] + " " + rest[i+1:]
+	}
+	return uri
+}
+
+// itemsViaContext resolves one context (a playlist, an album — the resolver
+// accepts any context uri) once and maps every playable entry to the track
+// model — one implementation for every caller. offset slices the resolved
+// set locally — the resolver is bounded, so there is only ever one real page
+// and NextOffset is -1: the UI must never wait for a second context resolve
+// that will not come.
+func itemsViaContext(ctx context.Context, uri string, offset int, resolve ContextResolver, batch MetadataBatch) (ItemsPage, error) {
 	if resolve == nil {
 		return ItemsPage{}, fmt.Errorf("no playlist contents resolver — the playback session is not up")
 	}
 	cctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
-	spotCtx, err := resolve(cctx, playlistContextURI(playlistID))
+	spotCtx, err := resolve(cctx, uri)
 	if err != nil {
 		// The reason surfaces verbatim: the UI renders it in the error state.
-		return ItemsPage{}, fmt.Errorf("resolving playlist %s: %w", playlistID, err)
+		return ItemsPage{}, fmt.Errorf("resolving %s: %w", contextLabel(uri), err)
 	}
 
 	page := ItemsPage{Offset: offset}
@@ -167,9 +182,11 @@ func durationFromMeta(values ...string) time.Duration {
 	return 0
 }
 
-// playlistTrackCount reads the playlist's own count from the context
+// playlistTrackCount reads the collection's own count from the context
 // metadata — the same key go-librespot's context resolver consults to decide
-// whether the pages it got cover the whole playlist.
+// whether the pages it got cover the whole playlist. A context without the
+// key (an album's resolve, today) simply reports no count: the total falls
+// back to what was resolved, stated honestly.
 func playlistTrackCount(spotCtx *connectpb.Context) (int, bool) {
 	v := spotCtx.Metadata["playlist_number_of_tracks"]
 	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
