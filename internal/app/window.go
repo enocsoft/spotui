@@ -13,6 +13,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/nahuel/spotify-tui/internal/library"
+
 	"github.com/nahuel/spotify-tui/internal/ui/theme"
 )
 
@@ -50,10 +52,12 @@ var (
 )
 
 // winRow is one scrollable row of window content (plain text; styled at
-// render time).
+// render time). label marks a type-group header of the real search results:
+// muted, informative, not actionable.
 type winRow struct {
-	text string
-	sel  bool // cursor row: bold primary on surface (current role)
+	text  string
+	sel   bool // cursor row: bold primary on surface (current role)
+	label bool
 }
 
 // winSpec is the content of one window: header title + meta, an optional
@@ -79,7 +83,7 @@ var keyHintsTable = [][2]string{
 // helpExtraKeys are the keys the status bar has no room for.
 var helpExtraKeys = [][2]string{
 	{"g/G", "top/bottom"}, {"ctrl+d/u", "half page"}, {"H/L", "shift"},
-	{"l", "save"}, {"ctrl+c", "quit"},
+	{"l", "save"}, {"r", "retry"}, {"ctrl+c", "quit"},
 }
 
 func (m Model) windowSpec() winSpec {
@@ -96,10 +100,14 @@ func (m Model) windowSpec() winSpec {
 	return winSpec{}
 }
 
-// searchSpec: the same panel as the palette in search mode — an input line
-// over the client-side filter of the currently open list. Remote search is
-// not faked: the footer says it lands later (T7).
+// searchSpec: the same panel in two modes. Mock mode filters the open list
+// client-side. Real mode runs GET /v1/search under the 2026 cap of 10 and
+// renders type-grouped results with per-group counts; scrolling past the last
+// row pages by offset.
 func (m Model) searchSpec() winSpec {
+	if m.fetch != nil {
+		return m.realSearchSpec()
+	}
 	s := winSpec{
 		title:    "search",
 		meta:     "esc close",
@@ -122,6 +130,98 @@ func (m Model) searchSpec() winSpec {
 		}
 		s.rows = append(s.rows, winRow{text: text, sel: i == m.cursor})
 	}
+	return s
+}
+
+// realSearchSpec renders the search window from catalog state: grouped
+// results with counts, and loading / empty / error / rate-limit states in
+// place — nothing is faked (scope 5).
+func (m Model) realSearchSpec() winSpec {
+	s := winSpec{
+		title:    "search",
+		meta:     "esc close",
+		hasInput: true,
+		input:    m.filter,
+		foot:     "enter search · esc close",
+	}
+	maxW, _ := m.windowMaxSize()
+	innerW := maxW - 4
+	// result rows do not widen the window past its content cap (winRowCap):
+	// pad the right-aligned metadata to the width the window will actually
+	// have, so it never clips into a truncation glyph.
+	rowW := innerW
+	if rowW > winRowCap-4 {
+		rowW = winRowCap - 4
+	}
+
+	resultRow := func(text, right string, label bool) {
+		if right != "" {
+			budget := rowW - visibleWidth(right) - 1
+			if budget < 1 {
+				budget = 1
+			}
+			text = padRight(truncate(text, budget), rowW-visibleWidth(right)) + right
+		}
+		s.rows = append(s.rows, winRow{text: text, label: label})
+	}
+
+	hits := m.searchHits()
+	switch {
+	case m.sQuery == "" && len(hits) == 0 && !m.sLoading && m.sErr == nil:
+		s.rows = append(s.rows, winRow{text: "type a query · enter searches Spotify"})
+		s.footR = ""
+		return s
+	case m.sLoading && len(hits) == 0:
+		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " searching…"})
+		s.footR = "searching…"
+		return s
+	case m.sErr != nil && len(hits) == 0:
+		if library.IsRateLimited(m.sErr) {
+			s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " rate limited · the player is retrying"})
+			s.footR = "rate limited"
+		} else {
+			s.rows = append(s.rows, winRow{text: "✗ " + m.sErr.Error()})
+			s.footR = "search failed · enter retries"
+		}
+		return s
+	case m.sRateLimited && len(hits) == 0:
+		// a 429 that survived the accessor's internal retries: the info state,
+		// not an invented retry loop (DESIGN global states)
+		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " rate limited · the player is retrying"})
+		s.footR = "rate limited"
+		return s
+	case m.sQuery != "" && len(hits) == 0 && !m.sLoading:
+		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " nothing matches"})
+		s.footR = "0 results"
+		return s
+	}
+
+	// type-grouped results with their counts (artboard: group count, metadata
+	// right-aligned); groups only render when they hold rows.
+	group := func(name string, loaded, total int) {
+		if loaded > 0 {
+			resultRow(fmt.Sprintf("%s %d of %d", name, loaded, total), "", true)
+		}
+	}
+	group("tracks", len(m.sTracks), m.sTotals.Tracks)
+	for i, t := range m.sTracks {
+		resultRow(fmt.Sprintf("%2d %s · %s", i+1, t.Title, t.Artist), fmtDur(t.Duration), false)
+	}
+	group("albums", len(m.sAlbums), m.sTotals.Albums)
+	for _, a := range m.sAlbums {
+		resultRow(theme.GlyphNotApplic+" "+a.Name, a.Artist, false)
+	}
+	group("playlists", len(m.sPlaylists), m.sTotals.Playlists)
+	for _, p := range m.sPlaylists {
+		resultRow(theme.GlyphNotApplic+" "+p.Name, p.Owner, false)
+	}
+	if m.sLoading && len(hits) > 0 {
+		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " loading more…", label: true})
+	}
+	if m.sRateLimited {
+		s.rows = append(s.rows, winRow{text: theme.GlyphIdle + " rate limited · the player is retrying", label: true})
+	}
+	s.footR = fmt.Sprintf("%d results", len(hits))
 	return s
 }
 
@@ -203,6 +303,10 @@ func (m Model) windowRowCount() int {
 		return len(keyHintsTable) + len(helpExtraKeys)
 	case winPicker:
 		return len(m.data.Sinks())
+	case winSearch:
+		if m.fetch != nil {
+			return len(m.searchSpec().rows)
+		}
 	}
 	return 0
 }
@@ -340,6 +444,10 @@ func winRowLine(r winRow, innerW int) string {
 	text := padRight(truncate(r.text, innerW), innerW)
 	if r.sel {
 		return winEdgeStyle.Render("│") + theme.CurrentStyle.Render(" "+text+" ") + winEdgeStyle.Render("│")
+	}
+	if r.label {
+		// group header: the muted label role (Same-Role Rule)
+		return winEdgeStyle.Render("│") + winLabelStyle.Render(" "+text+" ") + winEdgeStyle.Render("│")
 	}
 	return winEdgeStyle.Render("│") + winRowStyle.Render(" "+text+" ") + winEdgeStyle.Render("│")
 }

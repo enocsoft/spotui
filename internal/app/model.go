@@ -95,6 +95,50 @@ type Model struct {
 	cmdInput     string // palette command input (`:`)
 	preWinCursor int    // list cursor saved while a window is open
 	preWinOffset int    // list scroll offset saved while a window is open
+
+	// Real catalog (T7). fetch is nil in mock mode (SPOTIFY_TUI_MOCK=1): every
+	// block below is then unused and the mock data source drives everything.
+	// All catalog calls run inside tea.Cmd goroutines (library.Fetch blocks);
+	// the *Msg cases apply the answers here.
+	fetch library.Fetch
+
+	// Playlists panel (library root): one lazily fetched page after another.
+	plsLoaded  bool // a page applied at least once — no auto-refetch after it
+	plsLoading bool
+	plsErr     error
+	plsPending int // offset of the in-flight page, -1 when none
+	pls        []library.PlaylistSummary
+	plsTotal   int
+	plsNext    int // offset of the next page, -1 when exhausted
+
+	// Focused playlist contents (drill-down). plUnavailable non-empty is the
+	// 2026 not-owner state (S14): an honest state, never an empty list.
+	plID, plName, plOwner string
+	plPrivate, plCollab   bool
+	plUnavailable         string
+	plTracks              []library.Track
+	plTotal               int
+	plNext                int
+	plItemsLoading        bool
+	plItemsErr            error
+	iPending              int
+
+	// Search: the floating window (`/`) runs GET /v1/search under the 2026
+	// cap of 10 and pages by offset as the window scrolls.
+	sQuery       string
+	sPending     int
+	sNext        int
+	sLoading     bool
+	sRateLimited bool
+	sErr         error
+	sTracks      []library.Track
+	sAlbums      []library.AlbumSummary
+	sPlaylists   []library.PlaylistSummary
+	sTotals      library.SearchTotals
+
+	// pendingSaved holds saved toggles in flight: the cell answers only when
+	// the server does (Mirror Rule); on failure nothing to revert, just toast.
+	pendingSaved map[string]bool
 }
 
 // New builds the model. data and player are interfaces backed by mock data
@@ -105,14 +149,20 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 		clock = time.Now
 	}
 	m := Model{
-		cfg:       cfg,
-		data:      data,
-		player:    player,
-		clock:     clock,
-		section:   SectionLibrary,
-		drillDown: true, // start inside the mock playlist, as in the artboard
-		expanded:  map[string]bool{"PLAYLISTS": true},
+		cfg:          cfg,
+		data:         data,
+		player:       player,
+		clock:        clock,
+		section:      SectionLibrary,
+		expanded:     map[string]bool{"PLAYLISTS": true},
+		pendingSaved: map[string]bool{},
 	}
+	// Real mode: the player exposes the Web API catalog (T7) and the app starts
+	// at the library root. Mock mode keeps the artboard's drill-down start.
+	if cp, ok := player.(library.CatalogProvider); ok {
+		m.fetch = cp.Catalog()
+	}
+	m.drillDown = m.fetch == nil
 	if pe, ok := player.(library.PlayerEvents); ok {
 		m.eventCh = pe.Events()
 	}
@@ -179,12 +229,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.connecting = true
 		case library.EventReady:
 			m.loginURL, m.loginFile, m.playerErr, m.connecting = "", "", nil, false
+			// The session is live: fire the first (and only the first) playlists
+			// page. Paging follows `next` lazily from here on.
+			return m, tea.Batch(m.rearmEvents(), m.ensurePlaylistsLoaded())
 		case library.EventFailed:
 			// Clearing the URL matters: the login screen outranks the error view,
 			// so a failure after the URL was shown used to hide itself.
 			m.playerErr, m.connecting, m.loginURL, m.loginFile = msg.Err, false, "", ""
 		}
 		return m, m.rearmEvents()
+
+	case playlistsMsg:
+		m.applyPlaylists(msg)
+		return m, nil
+
+	case itemsMsg:
+		m.applyItems(msg)
+		return m, nil
+
+	case searchMsg:
+		m.applySearch(msg)
+		return m, nil
+
+	case savedMsg:
+		return m, m.applySaved(msg)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -202,19 +270,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleWindowKey(msg)
 	}
 
+	var cmd tea.Cmd
 	switch msg.String() {
 	case "up", "k":
 		m.moveCursor(-1)
 	case "down", "j":
 		m.moveCursor(1)
+		cmd = m.ensureMore()
 	case "g", "home":
 		m.cursor = 0
 		m.syncScroll()
 	case "G", "end":
 		m.cursor = max(0, len(m.visibleRows())-1)
 		m.syncScroll()
+		cmd = m.ensureMore()
 	case "ctrl+d":
 		m.moveCursor(m.listHeight() / 2)
+		cmd = m.ensureMore()
 	case "ctrl+u":
 		m.moveCursor(-m.listHeight() / 2)
 	case "enter":
@@ -235,10 +307,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.section = sections[(int(m.section)+1)%len(sections)]
 		m.cursor = 0
 		m.listOffset = 0
+		if m.section == SectionLibrary {
+			cmd = m.ensurePlaylistsLoaded()
+		}
 	case "q":
 		m.drawerOpen = !m.drawerOpen
 	case "l":
 		return m, m.onToggle()
+	case "r":
+		return m, m.onRetry()
 	case "esc":
 		return m, m.onEsc()
 	case "H":
@@ -254,7 +331,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.openWindow(winHelp)
 	}
-	return m, nil
+	return m, cmd
 }
 
 // handleWindowKey routes keys into the open floating window (S19): esc
@@ -288,6 +365,9 @@ func (m Model) handleWindowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case winSearch:
+		if m.fetch != nil {
+			return m.handleRealSearchKey(msg)
+		}
 		switch msg.String() {
 		case "esc":
 			m.closeWindow(true) // cancel: restore list and cursor
@@ -401,6 +481,49 @@ func (m *Model) syncWinScroll() {
 	if m.winCursor >= m.winOffset+area {
 		m.winOffset = m.winCursor - area + 1
 	}
+}
+
+// handleRealSearchKey is the search window in real mode: the input edits the
+// query, enter runs it or acts on the selected result, and j/k scroll the
+// results — reaching the last row pages by offset under the cap of 10.
+func (m Model) handleRealSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.closeWindow(true)
+	case "enter":
+		cmd := m.searchEnter()
+		return m, cmd
+	case "up", "k":
+		m.moveWinCursor(-1)
+	case "down", "j":
+		m.moveWinCursor(1)
+		return m, m.ensureMoreSearch()
+	case "backspace":
+		if r := []rune(m.filter); len(r) > 0 {
+			m.filter = string(r[:len(r)-1])
+		}
+		m.winOffset = 0
+	default:
+		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+			m.filter += msg.String()
+			m.winOffset = 0
+		}
+	}
+	return m, nil
+}
+
+// ensureMoreSearch pages the search results by offset when the window cursor
+// reaches the last row (scope 5: offset pagination driven by the scrolling).
+func (m *Model) ensureMoreSearch() tea.Cmd {
+	if m.fetch == nil || m.win != winSearch || m.sLoading || m.sNext < 0 || m.sErr != nil {
+		return nil
+	}
+	rows := m.searchSpec().rows
+	if m.winCursor != len(rows)-1 {
+		return nil
+	}
+	m.sLoading, m.sPending = true, m.sNext
+	return m.searchCmd(m.sNext)
 }
 
 func (m *Model) setToast(text string) tea.Cmd {

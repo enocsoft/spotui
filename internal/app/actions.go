@@ -16,10 +16,12 @@ const (
 	rowHeader rowKind = iota
 	rowPlaylistItem
 	rowTrack
+	rowStatus // loading / empty / error / unavailable / rate-limit panel state
 )
 
 // row is one visible list row. The list is one full-screen component (S4);
-// its rows are either section headers, a collection item or a track.
+// its rows are either section headers, a collection item, a track or a panel
+// status row (loading, empty, error, unavailable).
 type row struct {
 	kind    rowKind
 	text    string
@@ -27,6 +29,12 @@ type row struct {
 	num     int // 1-based position in its list (track rows)
 	track   library.Track
 	playing bool
+	// real catalog rows (T7): playlist rows carry their summary so `enter`
+	// can drill into them; status rows carry their state kind and hint.
+	meta string
+	hint string
+	st   statusKind
+	pl   library.PlaylistSummary
 }
 
 // currentTrack resolves the now-playing track. The real player reports the
@@ -78,10 +86,13 @@ func (m Model) tracksForView() []library.Track {
 
 func (m Model) playlistPlaying(id string) bool { return m.data.Session().TrackID == id }
 
-// visibleRows is the row list under the cursor. At the library root it is
-// section headers plus collection items; anywhere else it is the track list
-// of the focused view (playlist, search or queue).
+// visibleRows is the row list under the cursor. In real mode it is the
+// catalog's view (playlists pages, focused contents, search results); in mock
+// mode it is the fixture library.
 func (m Model) visibleRows() []row {
+	if m.fetch != nil {
+		return m.realRows()
+	}
 	if m.section == SectionLibrary && !m.drillDown {
 		var rows []row
 		for _, s := range m.data.Library() {
@@ -122,6 +133,9 @@ func (m *Model) onEnter() tea.Cmd {
 		if m.cursor < len(rows) {
 			r := rows[m.cursor]
 			if r.kind == rowPlaylistItem {
+				if m.fetch != nil {
+					return m.openPlaylist(r.pl)
+				}
 				m.drillDown = true
 				m.cursor = 0
 				m.listOffset = 0
@@ -214,6 +228,16 @@ func (m *Model) onToggle() tea.Cmd {
 		return m.setToast("l · " + name + " is empty in slice 1")
 	}
 	if r.kind == rowTrack {
+		if m.fetch != nil {
+			// Real mode: the cell answers only after the server does. While the
+			// toggle is in flight further presses are ignored (Mirror Rule).
+			if _, busy := m.pendingSaved[r.track.ID]; busy {
+				return nil
+			}
+			saved := !r.track.Saved
+			m.pendingSaved[r.track.ID] = saved
+			return m.savedCmd(r.track.ID, saved)
+		}
 		saved := !r.track.Saved
 		if err := m.data.SetSaved(r.track.ID, saved); err != nil {
 			return m.setToast("✗ " + err.Error())

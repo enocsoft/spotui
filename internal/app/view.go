@@ -268,8 +268,12 @@ func (m Model) topBar(w int) string {
 }
 
 // contextStrip: one row — where you are, owner/privacy, then the facts that
-// appear nowhere else (One Fact Rule).
+// appear nowhere else (One Fact Rule). Real mode reads the catalog state; the
+// mock keeps the fixture playlist.
 func (m Model) contextStrip(w int) string {
+	if m.fetch != nil {
+		return m.realContextStrip(w)
+	}
 	var left, right string
 	pl := m.data.Playlist()
 	switch {
@@ -297,6 +301,79 @@ func (m Model) contextStrip(w int) string {
 	return padRight(left, w-visibleWidth(right)) + right
 }
 
+// realContextStrip is the context strip over catalog state (T7): the playlist
+// drill-down carries owner and privacy, the playlists panel the fetched total,
+// search the query and its counts. Total time only shows when the whole list
+// is loaded — a partial page cannot claim the total.
+func (m Model) realContextStrip(w int) string {
+	var left, right string
+	switch {
+	case m.section == SectionLibrary && m.drillDown:
+		left = theme.LabelStyle.Render("playlists") + " " + theme.GlyphCrumb + " " +
+			theme.TitleStyle.Render(truncate(m.plName, w/3)) + "  " +
+			theme.MetaStyle.Render(m.plOwner+" · "+m.privacyWord())
+		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks", m.plCount()))
+		if m.plNext < 0 && m.plUnavailable == "" && m.plItemsErr == nil && len(m.plTracks) > 0 {
+			right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s", m.plTotal, fmtTotal(totalDuration(m.plTracks))))
+		}
+	case m.section == SectionLibrary:
+		left = theme.TitleStyle.Render("library")
+		switch {
+		case m.plsErr != nil:
+			right = theme.MetaStyle.Render("could not load")
+		case m.plsLoading && m.plsTotal == 0:
+			right = theme.MetaStyle.Render("loading…")
+		default:
+			right = theme.MetaStyle.Render(fmt.Sprintf("%d playlists", m.plsTotal))
+		}
+	case m.section == SectionSearch:
+		left = theme.TitleStyle.Render("search")
+		if m.sQuery != "" {
+			left = theme.LabelStyle.Render("search") + " " + theme.GlyphCrumb + " " +
+				theme.TitleStyle.Render(truncate(m.sQuery, w/3))
+		}
+		right = theme.MetaStyle.Render(fmt.Sprintf("%d of %d tracks", len(m.sTracks), m.sTotals.Tracks))
+	default:
+		left = theme.TitleStyle.Render("queue")
+		right = theme.MetaStyle.Render(fmt.Sprintf("%d tracks · %s",
+			len(m.data.Queue()), fmtTotal(totalDuration(m.data.Queue()))))
+	}
+	if lw, rw := visibleWidth(left), visibleWidth(right); lw+rw+1 > w {
+		return theme.ValueStyle.Render(truncate(stripANSI(left), w))
+	}
+	return padRight(left, w-visibleWidth(right)) + right
+}
+
+// privacyWord renders the playlist privacy fact (never invented: collab wins).
+func (m Model) privacyWord() string {
+	switch {
+	case m.plCollab:
+		return "collab"
+	case m.plPrivate:
+		return "private"
+	default:
+		return "public"
+	}
+}
+
+// plCount is the known track count of the focused playlist: the server total
+// once contents arrive, the listing's count before that, · otherwise.
+func (m Model) plCount() int {
+	if m.plTotal > 0 {
+		return m.plTotal
+	}
+	return m.plKnownCount()
+}
+
+func (m Model) plKnownCount() int {
+	for _, pl := range m.pls {
+		if pl.ID == m.plID {
+			return pl.TrackCount
+		}
+	}
+	return library.NoTrackCount
+}
+
 // listBody renders exactly h lines: the table header (in track views) plus
 // the visible data rows, padded to h. Nothing may overflow the width.
 func (m Model) listBody(h int) []string {
@@ -304,6 +381,11 @@ func (m Model) listBody(h int) []string {
 	out := make([]string, 0, h)
 	dataRows := h
 	inTrackView := !(m.section == SectionLibrary && !m.drillDown)
+	// An unavailable playlist (2026: not owner/collaborator) must not render
+	// an empty track table pretending success — only its honest state (T7).
+	if m.fetch != nil && m.section == SectionLibrary && m.drillDown && m.plUnavailable != "" {
+		inTrackView = false
+	}
 	if inTrackView {
 		out = append(out, tableHeader(tableLayout(m.w)))
 		dataRows--
@@ -324,6 +406,8 @@ func (m Model) listBody(h int) []string {
 		sel := from+i == m.cursor
 		if r.kind == rowTrack {
 			out = append(out, m.trackLine(cols, r, sel))
+		} else if r.kind == rowStatus {
+			out = append(out, m.statusLine(r, sel))
 		} else {
 			out = append(out, m.libraryRow(r, sel))
 		}
@@ -407,14 +491,24 @@ func savedGlyph(saved bool) string {
 }
 
 // libraryRow renders library-root rows: section headers and collection items,
-// name left, count right (DESIGN §7 library view).
+// name left, count right (DESIGN §7 library view). Real playlist rows carry a
+// meta segment (owner · privacy · count) instead of the bare count.
 func (m Model) libraryRow(r row, selected bool) string {
 	w := m.w
-	count := fmt.Sprintf("%d", r.count)
 	indent := " "
 	if r.kind == rowPlaylistItem {
 		indent = "   "
 	}
+	if r.kind == rowPlaylistItem && r.meta != "" {
+		line := truncate(indent+r.text, w-visibleWidth(r.meta)-3)
+		plain := padRight(line, w-1-visibleWidth(r.meta)) + r.meta
+		if selected {
+			return theme.SelectedStyle.Width(w).Render(plain)
+		}
+		return padRight(theme.ValueStyle.Render(line), w-1-visibleWidth(r.meta)) +
+			theme.MetaStyle.Render(r.meta)
+	}
+	count := fmt.Sprintf("%d", r.count)
 	plain := padRight(indent+r.text, w-9) + padLeft(count, 8)
 	if selected {
 		return theme.SelectedStyle.Width(w).Render(plain)
@@ -424,6 +518,25 @@ func (m Model) libraryRow(r row, selected bool) string {
 		name = theme.ValueStyle.Render(indent + r.text)
 	}
 	return padRight(name, w-9) + theme.NumberStyle.Render(padLeft(count, 8))
+}
+
+// statusLine renders a panel state row in place: loading / empty / info in
+// the muted meta role, error and unavailable in the value role with their
+// reason. Selected states take the surface band like any row.
+func (m Model) statusLine(r row, selected bool) string {
+	line := " " + r.text
+	if r.hint != "" {
+		line += " · " + r.hint
+	}
+	line = truncate(stripANSI(line), m.w-2)
+	if selected {
+		return theme.SelectedStyle.Width(m.w).Render(" " + padRight(line, m.w-2))
+	}
+	style := theme.MetaStyle
+	if r.st == stError || r.st == stUnavailable {
+		style = theme.ValueStyle
+	}
+	return " " + style.Render(padRight(line, m.w-2))
 }
 
 // drawerHead: ▾ QUEUE · up next 8 of 41 · total · repeat mode (rail band).
@@ -580,8 +693,12 @@ func (m Model) statusBar(w int) string {
 	var left string
 	switch {
 	case m.win == winSearch:
+		apply := "enter apply · esc cancel"
+		if m.fetch != nil {
+			apply = "enter search · esc close"
+		}
 		left = theme.AccentStyle.Render("/ "+truncate(m.filter, w/2)) + "   " +
-			theme.LabelStyle.Render("enter apply · esc cancel")
+			theme.LabelStyle.Render(apply)
 	case m.toast.text != "":
 		left = theme.ValueStyle.Render(truncate(m.toast.text, w))
 	default:
@@ -610,10 +727,19 @@ func (m Model) keyHints(maxWidth int) string {
 func (m Model) viewState() string {
 	switch m.section {
 	case SectionSearch:
+		if m.fetch != nil && m.sQuery != "" {
+			return "search / " + strings.ToLower(truncate(m.sQuery, 24))
+		}
 		return "search"
 	case SectionQueue:
 		return "queue"
 	default:
+		if m.fetch != nil {
+			if m.drillDown {
+				return "library / " + strings.ToLower(truncate(m.plName, 32))
+			}
+			return "library"
+		}
 		if m.drillDown {
 			return "library / " + strings.ToLower(m.data.Playlist().Name)
 		}
