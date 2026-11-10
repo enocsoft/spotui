@@ -333,6 +333,13 @@ func (m *Model) removeSavedTrack(id string) {
 			if m.savedTotal > 0 {
 				m.savedTotal--
 			}
+			// The saved list is paged by offset against the server's own list.
+			// Removing a row shrinks that list before savedNext, so reusing the old
+			// offset would skip the first item of the next page and leave the set
+			// silently incomplete.
+			if m.savedNext > 0 {
+				m.savedNext--
+			}
 			m.clampCursor()
 			return
 		}

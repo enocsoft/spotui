@@ -310,3 +310,26 @@ func TestSavedEndpointErrorSurfacesTheStatus(t *testing.T) {
 		t.Errorf("an error must never render as an empty list, got:\n%s", got)
 	}
 }
+
+// TestUnsavingKeepsThePagingOffsetHonest: the saved list pages by offset against
+// the server. A confirmed unsave shrinks that list before savedNext, so the next
+// page must be requested one slot earlier or the first track is skipped and the
+// saved set silently loses a song.
+func TestUnsavingKeepsThePagingOffsetHonest(t *testing.T) {
+	m := newModel(t, 180, 50)
+	m.savedTracks = []library.Track{{ID: realTrackID}, {ID: "0VjIjW4GlUZAMYd2vXMi3b"}}
+	m.savedTotal = 137
+	m.savedNext = 50
+
+	m.removeSavedTrack(realTrackID)
+
+	if len(m.savedTracks) != 1 || m.savedTracks[0].ID != "0VjIjW4GlUZAMYd2vXMi3b" {
+		t.Fatalf("the row was not removed: %+v", m.savedTracks)
+	}
+	if m.savedTotal != 136 {
+		t.Errorf("total = %d, want 136", m.savedTotal)
+	}
+	if m.savedNext != 49 {
+		t.Errorf("next offset = %d, want 49: reusing 50 skips a saved track", m.savedNext)
+	}
+}
