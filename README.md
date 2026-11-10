@@ -179,3 +179,8 @@ SPOTUI_MOCK=1 go run ./cmd/spotui   # offline shell, no credentials needed
 
 The test suite needs no Spotify account and no network: it covers layout widths at 180, 140 and 80
 columns, the window geometry, the keymap, config parsing and the pure player mappings.
+
+## License
+
+MIT. The Spotify name and logo belong to Spotify; this is an unofficial client, not
+affiliated with or endorsed by them.
