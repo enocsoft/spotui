@@ -8,6 +8,7 @@
 package library
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -141,6 +142,17 @@ type Event struct {
 // relays the channel into bubbletea messages.
 type PlayerEvents interface {
 	Events() <-chan Event
+}
+
+// AutoplayResolver is the radio seam (T26): it asks Spotify for the next
+// related context of a seed track — what the player's spclient resolves
+// with ContextResolveAutoplay — and answers the playable tracks it found,
+// in the order they should play. Implemented by the real player; the TUI
+// holds it as an injectable seam so radio tests need no session.
+type AutoplayResolver interface {
+	// ResolveAutoplay resolves the radio continuation of seedURI (a
+	// spotify:track: uri) avoiding the recently played track uris.
+	ResolveAutoplay(ctx context.Context, seedURI string, recent []string) ([]Track, error)
 }
 
 // The two logins the TUI names in the login state (two tokens, one purpose

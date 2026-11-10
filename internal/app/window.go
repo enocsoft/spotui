@@ -80,7 +80,7 @@ var keyHintsTable = [][2]string{
 // helpExtraKeys are the keys the status bar has no room for.
 var helpExtraKeys = [][2]string{
 	{"g/G", "top/bottom"}, {"ctrl+d/u", "half page"}, {"H/L", "shift"},
-	{"l", "save"}, {"r", "retry"}, {"ctrl+c", "quit"},
+	{"l", "save"}, {"r", "retry"}, {"R", "radio"}, {"ctrl+c", "quit"},
 }
 
 func (m Model) windowSpec() winSpec {

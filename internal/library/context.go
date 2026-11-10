@@ -217,3 +217,22 @@ func contextTruncated(spotCtx *connectpb.Context, seen, total int) bool {
 	}
 	return false
 }
+
+// TracksFromContext maps an autoplay (radio) resolved context to its playable
+// track rows (T26) — the same entry mapping itemsViaContext walks, without
+// the paging bookkeeping radio does not need. Entries without a playable uri
+// are skipped: radio never offers the player something unplayable.
+func TracksFromContext(spotCtx *connectpb.Context) []Track {
+	if spotCtx == nil {
+		return nil
+	}
+	var out []Track
+	for _, p := range spotCtx.Pages {
+		for _, ct := range p.Tracks {
+			if t, playable := trackFromContext(ct); playable {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}

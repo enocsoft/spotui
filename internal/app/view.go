@@ -67,10 +67,14 @@ var matchedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Text2)
 
 // tableCols distributes the terminal width over the track-table columns.
 // ≥140: every column (DESIGN breakpoint table); 100–139: ADDED dropped;
-// 80–99: narrower artist/album.
+// 80–99: narrower artist/album. showAdded decides whether the table carries
+// ADDED at all (T28): the column set may differ per view. The context
+// resolver and the search API never return added_at, so real-mode track
+// tables (playlist, album, search results) drop it instead of promising a
+// column their data cannot fill; the mock fixture carries dates and keeps it.
 type tableCols struct{ num, title, artist, album, saved, added, timeC int }
 
-func tableLayout(w int) tableCols {
+func tableLayout(w int, showAdded bool) tableCols {
 	c := tableCols{num: 4, saved: 5, timeC: 8}
 	switch {
 	case w >= 140:
@@ -79,6 +83,9 @@ func tableLayout(w int) tableCols {
 		c.artist, c.album = 30, 34
 	default:
 		c.artist, c.album = 18, 20
+	}
+	if !showAdded {
+		c.added = 0
 	}
 	fixed := c.num + c.artist + c.album + c.saved + c.added + c.timeC
 	seps := 5
@@ -91,6 +98,11 @@ func tableLayout(w int) tableCols {
 	}
 	return c
 }
+
+// showAddedColumn reports whether the table may render the ADDED column:
+// only where the data exists. The resolver-backed playlist and album
+// contents (and search results) never carry added_at; the mock does.
+func (m Model) showAddedColumn() bool { return m.fetch == nil }
 
 // listHeight is the frame rows the full-screen list owns.
 func (m Model) listHeight() int {
@@ -433,12 +445,13 @@ func (m Model) listBody(h int) []string {
 	rows := m.visibleRows()
 	out := make([]string, 0, h)
 	dataRows := h
+	cols := tableLayout(m.w, m.showAddedColumn())
 	// The table header belongs to a track list: the Tracks view (open playlist
 	// or the mock's open list). The results view renders mixed kinds, the
 	// Playlists navigation its own groups — no header there.
 	inTrackView := m.section == SectionTracks && !m.sView
 	if inTrackView {
-		out = append(out, tableHeader(tableLayout(m.w)))
+		out = append(out, tableHeader(cols))
 		dataRows--
 	}
 	if dataRows < 0 {
@@ -452,7 +465,6 @@ func (m Model) listBody(h int) []string {
 	if to > len(rows) {
 		to = len(rows)
 	}
-	cols := tableLayout(m.w)
 	for i, r := range rows[from:to] {
 		sel := from+i == m.cursor
 		if r.kind == rowTrack {
@@ -661,9 +673,12 @@ func (m Model) statusLine(r row, selected bool) string {
 }
 
 // drawerHead: ▾ QUEUE · up next 8 of 41 · total · repeat mode (rail band).
+// While radio is active (T26) the count is what radio has lined up: the
+// drawer mirrors what plays next, not the untouched open list.
 func (m Model) drawerHead(w int) string {
-	left := theme.GlyphExpanded + " QUEUE  " + fmt.Sprintf("up next %d of %d", drawerRow, len(m.data.Queue()))
-	right := fmt.Sprintf("%s · repeat %s", fmtTotal(totalDuration(m.data.Queue())), m.data.Session().Repeat)
+	q := m.drawerSource()
+	left := theme.GlyphExpanded + " QUEUE  " + fmt.Sprintf("up next %d of %d", drawerRow, len(q))
+	right := fmt.Sprintf("%s · repeat %s", fmtTotal(totalDuration(q)), m.data.Session().Repeat)
 	if visibleWidth(left)+visibleWidth(right)+2 > w {
 		right = ""
 	}
@@ -671,10 +686,21 @@ func (m Model) drawerHead(w int) string {
 	return theme.DrawerStyle.Width(w).Render(truncate(line, w))
 }
 
+// drawerSource is what the drawer mirrors right now: what radio has lined up
+// while radio is active (T26), otherwise the session queue.
+func (m Model) drawerSource() []library.Track {
+	if m.radioOn && len(m.radioUpNext) > 0 {
+		return m.radioUpNext
+	}
+	return m.data.Queue()
+}
+
 // drawerRows: up next only; the player bar owns the current track (S4).
+// While radio is active and has lined-up tracks (T26) the drawer shows those:
+// radio plays outside the open list.
 func (m Model) drawerRows(w int) []string {
-	q := m.data.Queue()
-	if m.shuffleOn {
+	q := m.drawerSource()
+	if m.shuffleOn && !(m.radioOn && len(m.radioUpNext) > 0) {
 		// Shuffle on: the drawer mirrors the shuffled order — the same walk
 		// `n` takes (T21).
 		if up := m.shuffleUpNext(); len(up) > 0 {
@@ -756,9 +782,19 @@ func (m Model) playerBar(w int) []string {
 		mode = "shuffle on · repeat " + s.Repeat
 	}
 	vol := m.volumeCell(s.Volume)
+	// Radio (T26) reports in the live role, next to the shuffle/repeat text;
+	// the word is a state (Never-Color-Alone Rule), no new glyph.
+	radioTxt := ""
+	if m.radioOn {
+		radioTxt = " · " + theme.LiveStyle.Render("radio on")
+	}
+	modeBudget := w - 2 - 40 - visibleWidth(vol) - visibleWidth(radioTxt)
+	if modeBudget < 8 {
+		modeBudget = 8
+	}
 	row2 := padRight(m.progressCell(30), 40) +
-		padRight(theme.MetaStyle.Render(truncate(mode, w-2-40-visibleWidth(vol))), w-2-40-visibleWidth(vol)) +
-		vol
+		padRight(theme.MetaStyle.Render(truncate(mode, modeBudget)), modeBudget) +
+		radioTxt + vol
 	return []string{
 		theme.PlayerStyle.Width(w).Render(row1),
 		theme.PlayerStyle.Width(w).Render(row2),

@@ -51,6 +51,15 @@ type searchDebounceTick struct{ seq int }
 // EventReady / EventFailed / EventState) into the update loop.
 type playerEventMsg struct{ library.Event }
 
+// radioResolvedMsg is the answer of one radio autoplay resolve (T26): the
+// boundary that fired (its track id) and the resolve's playable tracks, or
+// its error. Applied by the update loop; stale answers are dropped.
+type radioResolvedMsg struct {
+	trackID string
+	tracks  []library.Track
+	err     error
+}
+
 // tickMsg asks for a re-render so live player state (progress) mirrors
 // without any keypress (Mirror Rule).
 type tickMsg struct{}
@@ -174,6 +183,21 @@ type Model struct {
 	shuffleOn  bool
 	shuffleOrd []int
 	perm       func(n int, seed int64) []int
+
+	// Radio (T26): `R` toggles autoplay continuation. Off by default. Radio
+	// plays outside the open list: at the end-of-track boundary (derived from
+	// the one-second state tick, the only signal the player events carry) the
+	// injectable autoplay resolver asks Spotify for the next related context
+	// and the first playable result plays through the existing play path.
+	// radioUpNext is what radio has lined up, what the drawer shows while it
+	// is active; radioFiredID latches the boundary so it fires exactly once
+	// per track; radioRecent holds the recently played track uris the resolve
+	// is seeded with.
+	radioOn      bool
+	radioUpNext  []library.Track
+	radioFiredID string
+	radioRecent  []string
+	autoplay     library.AutoplayResolver
 }
 
 // New builds the model. data and player are interfaces backed by mock data
@@ -202,6 +226,9 @@ func New(cfg config.Config, data library.DataSource, player library.Player, cloc
 	}
 	if pe, ok := player.(library.PlayerEvents); ok {
 		m.eventCh = pe.Events()
+	}
+	if ar, ok := player.(library.AutoplayResolver); ok {
+		m.autoplay = ar
 	}
 	return m
 }
@@ -266,7 +293,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		// The one-second state tick is also the end-of-track detector of radio
+		// (T26): the player events carry no "track ended" signal, so when the
+		// reported position reaches the duration and radio is on, the boundary
+		// fires — exactly once per track, latched by track id.
+		if cmd := m.radioCheck(); cmd != nil {
+			return m, cmd
+		}
 		return m, tickCmd()
+
+	case radioResolvedMsg:
+		return m, m.applyRadioResolved(msg)
 
 	case playerEventMsg:
 		switch msg.Type {
@@ -361,6 +398,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.onPrev()
 	case "s":
 		return m, m.onShuffle()
+	case "R":
+		return m, m.onRadio()
 	case "+", "=":
 		return m, m.onVolume(1)
 	case "-":

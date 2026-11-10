@@ -124,11 +124,14 @@ func (m Model) trackUnderCursor() (library.Track, bool) {
 	return r.track, r.kind == rowTrack
 }
 
-// playRow plays the track on a row; used by list and search results.
+// playRow plays the track on a row; used by list and search results. Every
+// successful play rides the recently played uris radio seeds with (T26).
+// Radio plays through this same path, outside the open list.
 func (m *Model) playRow(t library.Track) tea.Cmd {
 	if err := m.player.Play(t); err != nil {
 		return m.setToast("✗ " + err.Error())
 	}
+	m.notePlayed(t.ID)
 	return m.setToast("▶ " + t.Title)
 }
 
@@ -364,6 +367,7 @@ func (m *Model) execCommand() tea.Cmd {
 			if err := m.player.Play(library.Track{ID: tgt.ID}); err != nil {
 				return m.setToast("✗ " + err.Error())
 			}
+			m.notePlayed(tgt.ID)
 			return m.setToast("▶ " + tgt.ID)
 		}
 		if m.fetch == nil {
