@@ -29,6 +29,23 @@ the same approach as `ncspot` and `spotifyd`. It is **not** an official Spotify 
 **personal, non-commercial use**, and it **requires Spotify Premium** — librespot does not support free
 accounts, and Spotify refuses to play without an active subscription.
 
+## Install
+
+Three ways, depending on what you want:
+
+| You want | Command |
+| --- | --- |
+| Try it from the worktree | `go run ./cmd/spotify-tui` |
+| Keep it in your PATH | `make install` (installs to `~/.local/bin/spotify-tui`) |
+| Build a file you can move | `make build` (writes `./spotify-tui`) |
+
+`make check` runs what CI would: format, vet, tests and a CGO build. `make test` runs the
+suite alone.
+
+The binary is a normal dynamic executable: it links against the system audio libraries
+(`libasound`, `libpulse`) and the FLAC decoder, so copying it to another machine needs
+those packages there. Building it there from source is usually simpler than shipping it.
+
 ## Requirements
 
 - Linux with PulseAudio or PipeWire (`pipewire-pulse` works).
