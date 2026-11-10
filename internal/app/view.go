@@ -786,16 +786,34 @@ func (m Model) playerBar(w int) []string {
 	if m.radioOn {
 		radioTxt = " · " + theme.LiveStyle.Render("radio on")
 	}
-	modeBudget := w - 2 - 40 - visibleWidth(vol) - visibleWidth(radioTxt)
-	if modeBudget < 8 {
-		modeBudget = 8
+	// Row 1 carries everything that is a fact: what plays, how it plays and where
+	// it comes out. Row 2 is the progress track edge to edge, which is where the
+	// eye wants it. If the right cluster would eat the artist, drop the output
+	// segment (the picker `d` still names it), then the volume.
+	const minMid = 20 // the artist line must keep enough cells to be readable
+	budget := w - 2 - 40 - minMid
+	right := theme.MetaStyle.Render(truncate(mode, max(8, w/4))) + radioTxt + "  " + vol
+	if outW > 0 {
+		if withOut := right + "  " + output; visibleWidth(withOut) <= budget {
+			right = withOut
+		}
 	}
-	row2 := padRight(m.progressCell(30), 40) +
-		padRight(theme.MetaStyle.Render(truncate(mode, modeBudget)), modeBudget) +
-		radioTxt + vol
+	if visibleWidth(right) > budget {
+		right = theme.MetaStyle.Render(truncate(mode, max(8, w/4))) + radioTxt
+	}
+	rightW := visibleWidth(right)
+	midBudget2 := w - 2 - 40 - rightW
+	if midBudget2 < 8 {
+		midBudget2 = 8
+	}
+	mid2 := theme.MetaStyle.Render(truncate(artist+" — "+m.albumOf(), midBudget2))
+	row1 = padRight(theme.LiveStyle.Render(glyph)+" "+theme.TitleStyle.Render(truncate(title, 38)), 40) +
+		padRight(mid2, midBudget2) + right
+	// padRight instead of Style.Width: Width() wraps when its own measurement
+	// disagrees with ours by a cell, and a wrapped bar costs a whole phantom line.
 	return []string{
-		theme.PlayerStyle.Width(w).Render(row1),
-		theme.PlayerStyle.Width(w).Render(row2),
+		theme.PlayerStyle.Render(padRight(row1, w)),
+		theme.PlayerStyle.Render(padRight(m.progressCell(w-2), w)),
 	}
 }
 

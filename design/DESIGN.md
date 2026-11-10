@@ -105,7 +105,7 @@ At 180×50: one full-screen list, a one-row context strip, a queue drawer of 8 r
 - **Context strip** — one row: where you are (`playlists / Bebop Essentials`), owner and privacy, then track count, total time and the current sort. The only place those facts appear.
 - **List** — owns every column the terminal has, minus 2 cells of inset. A view is one list: library, album, playlist, search results, queue.
 - **Queue drawer** — 8 rows above the player, toggled with `q`, tinted with `rail` and closed by one `─` rule. It shows *up next only*: the current track already lives in the player bar.
-- **Player bar** — always two rows at ≥140 columns: row 1 = state glyph, title, artist/album/year, audio output and bitrate; row 2 = progress track with times, shuffle/repeat mode, volume. At 80 columns it collapses to one row and drops the times, keeping the progress track.
+- **Player bar** — always two rows at ≥140 columns: row 1 = state glyph, title, artist/album/year, then shuffle/repeat/radio and volume, then the audio output and bitrate (the output segment drops first when the row cannot hold it); row 2 = the progress track edge to edge, dashed, with the times at both ends. At 80 columns it collapses to one row and keeps a short progress track.
 - **Status bar** — one row, fixed at the bottom, contextual keys on the left in the order you need them, view state and clock on the right, separated by 3-cell gaps.
 
 Breakpoints, keyed on terminal columns:
