@@ -154,8 +154,13 @@ func (p *Player) run() {
 		ConfigDir:    p.opts.ConfigDir,
 		CallbackPort: p.opts.CallbackPort,
 		DeviceType:   "computer",
-		ClientId:     p.opts.ClientID,
-		Credentials:  nil, // stored credentials, else interactive login
+		// Empty on purpose: the embedded session authenticates with librespot's own
+		// client id. A dashboard client id is registered for the Web API authorization
+		// flow, not for librespot's client-token exchange, and passing it here makes that
+		// exchange fail with a bare 400. The configured client id is used by the Web API
+		// slice (T7) instead.
+		ClientId:    "",
+		Credentials: nil, // stored credentials, else interactive login
 	})
 	if err != nil {
 		p.mu.Lock()

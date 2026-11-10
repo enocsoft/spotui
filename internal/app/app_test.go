@@ -408,3 +408,18 @@ func TestPlayerEventLoginFitsNarrow(t *testing.T) {
 		t.Errorf("login view should still name the state at 80 columns")
 	}
 }
+
+// TestPlayerErrorViewDoesNotAssumePremium: a bootstrap failure must surface the
+// real error; a bare 400 from the client-token exchange is not proof that the
+// account lacks Premium, and saying so sends people down the wrong path.
+func TestPlayerErrorViewDoesNotAssumePremium(t *testing.T) {
+	m := newModel(t, 180, 50)
+	m.playerErr = errors.New("failed obtaining client token: status=400")
+	got := m.View()
+	if strings.Contains(got, "needs Spotify Premium") {
+		t.Errorf("failure view asserts the account is not Premium without knowing it")
+	}
+	if !strings.Contains(got, "client token") {
+		t.Errorf("failure view should show the real error, got:\n%s", got)
+	}
+}

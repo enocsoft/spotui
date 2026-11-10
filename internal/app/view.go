@@ -185,7 +185,7 @@ func (m Model) playerErrorView() string {
 		"",
 		theme.ValueStyle.Render("✗ " + m.playerErr.Error()),
 		"",
-		theme.MetaStyle.Render("librespot needs Spotify Premium; check the terminal output and restart"),
+		theme.MetaStyle.Render("usual causes: an account without Premium, or stale credentials in the state dir"),
 		"",
 		theme.LabelStyle.Render("ctrl+c quit"),
 	})

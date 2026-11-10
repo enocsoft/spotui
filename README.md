@@ -54,6 +54,11 @@ accounts, and Spotify refuses to play without an active subscription.
    callback_port = 8888      # optional, this is the default
    output        = ""        # optional: preferred sink name, empty = system default
    ```
+
+   `client_id` is the dashboard app, used for the library and search calls. The embedded playback
+   session authenticates with **librespot's own** client id: a dashboard app is registered for the Web
+   API authorization flow, not for librespot's client-token exchange, and passing it there fails with a
+   bare `400`.
 4. Run it:
 
    ```sh
