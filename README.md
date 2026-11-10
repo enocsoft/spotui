@@ -17,7 +17,7 @@ Keyboard model borrowed from `k9s` and `lazygit`: no modal editing, single keys,
 | Interface | real: section row, context strip, full-screen list, queue drawer, player bar, status bar |
 | Floating windows | real: `/` (input only), `:`, `d`, `?` |
 | Library | real: your playlists, saved albums, playlist and album contents, search |
-| Radio | real: `R` keeps playing related tracks after the current one |
+| Radio | real: on by default (a playlist or a single track keeps going); `R` toggles it |
 | Login | real: `o` opens the authorization page in your default browser |
 | Library and search data | **mock** — the rows are fixed fixture data, not your account (next slice) |
 | Playing a track | `:play spotify:track:<id>` works now; pressing `enter` on a mock row does not |
@@ -90,7 +90,7 @@ like. Pick the output with `d`; the current track resumes on the new sink.
 | `enter` | play the row under the cursor |
 | `a` | enqueue |
 | `space` | play / pause |
-| `n` `p` | next / previous track |
+| `n` `p` | next / previous in the playback order; `n` continues through radio at the end |
 | `+` `-` | volume |
 | `tab` | next section (`Tracks`, `Playlists`) |
 | `q` | toggle the queue drawer |
@@ -99,8 +99,8 @@ like. Pick the output with `d`; the current track resumes on the new sink.
 | `/` | search window |
 | `:` | command window |
 | `d` | audio output window |
-| `s` | shuffle the open list (our order then drives `n`/`p`) |
-| `R` | radio: keep playing related tracks after this one |
+| `s` | shuffle what plays next; the list itself never moves |
+| `R` | toggle radio (on by default): related tracks continue when the context ends |
 | `o` | on the login screen, open the authorization page in your browser |
 | `?` | help |
 
