@@ -1,6 +1,7 @@
 // library.DataSource and library.Player implementation on the embedded
-// session. Library lists delegate to the content DataSource (mock until
-// slice 3); session state, sinks and every playback action are real.
+// session. Library lists read from the content DataSource in mock mode; the
+// real catalog is fetched through Catalog() (T7). Session state, sinks and
+// every playback action are real.
 package player
 
 import (
@@ -21,24 +22,32 @@ const volumeStep = 5
 
 // --- library.DataSource ---
 
-// Library delegates the library sections to the content DataSource (mock
-// until slice 3 wires the Web API catalog).
+// Library serves the mock-mode library sections from the content DataSource;
+// the real playlists panel reads catalog state instead (T7).
 func (p *Player) Library() []library.Section { return p.content.Library() }
 
-// Playlist delegates the focused collection.
+// Playlist serves the mock-mode focused playlist from the content DataSource;
+// real drill-downs read catalog state instead (T7).
 func (p *Player) Playlist() library.Playlist { return p.content.Playlist() }
 
-// Queue returns the real play queue first, then the content queue: the
-// drawer shows up-next including what `a` enqueued after login.
+// Queue returns the real play queue: what `a` enqueued and what played next
+// from it. The slice-1 delegate fixture queue is appended only while the
+// embedded session is not live — once the real catalog owns the lists, its
+// 41 fixture rows must never leak into the drawer (T7).
 func (p *Player) Queue() []library.Track {
 	p.mu.Lock()
 	q := make([]library.Track, len(p.queue))
 	copy(q, p.queue)
+	live := p.ready
 	p.mu.Unlock()
+	if live {
+		return q
+	}
 	return append(q, p.content.Queue()...)
 }
 
-// SetSaved delegates the saved toggle (a Web API call once slice 3 lands).
+// SetSaved serves the mock-mode saved toggle; the real toggle goes through
+// library.Fetch.SetSaved (generic PUT /v1/library · DELETE /me/library, T7).
 func (p *Player) SetSaved(id string, saved bool) error { return p.content.SetSaved(id, saved) }
 
 // Sinks lists the real audio outputs of this machine (spec S16), sorted for
@@ -134,8 +143,7 @@ func (p *Player) Session() library.Session {
 // --- library.Player ---
 
 // Play starts a track. The track id must be a real Spotify track id; mock
-// rows are rejected with an actionable error until slice 3 brings the real
-// catalog.
+// rows are rejected with an actionable error (real rows carry their ids).
 func (p *Player) Play(track library.Track) error {
 	p.mu.Lock()
 	ready, bootErr := p.ready, p.bootErr

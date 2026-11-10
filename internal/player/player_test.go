@@ -2,6 +2,7 @@ package player
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -198,3 +199,47 @@ func TestLoginURLIsHandedOverWhole(t *testing.T) {
 		t.Errorf("the log file must still redact the URL: %s", buf.String())
 	}
 }
+
+// TestCatalogNeedsTheSession: the catalog fetches through the embedded
+// session's own Web API accessor — no session, no calls, one clear error.
+func TestCatalogNeedsTheSession(t *testing.T) {
+	p := New(Options{}, nil)
+	fetch := p.Catalog()
+	if fetch == nil {
+		t.Fatal("the player must expose the catalog even before login: the UI renders its states")
+	}
+	if _, err := fetch.Playlists(context.Background(), 0); err == nil ||
+		!strings.Contains(err.Error(), "not logged in") {
+		t.Errorf("Playlists without a session = %v, want the not-logged-in error", err)
+	}
+}
+
+// TestQueueDropsTheDelegateFixtureOnceLive: slice 1 filled the drawer with the
+// delegate's 41 mock rows; with the real catalog (T7) the queue is only what
+// the user enqueued, before and after login — fixture rows must never leak
+// into the real drawer.
+func TestQueueDropsTheDelegateFixtureOnceLive(t *testing.T) {
+	p := New(Options{}, fixtureContent{})
+	if got := p.Queue(); len(got) != 1 {
+		t.Fatalf("before login queue = %d rows, want the 1 delegate row", len(got))
+	}
+	p.mu.Lock()
+	p.ready = true
+	p.mu.Unlock()
+	if got := p.Queue(); len(got) != 0 {
+		t.Errorf("after login queue = %d rows, want 0 — the fixture queue must not leak", len(got))
+	}
+}
+
+// fixtureContent is a minimal library.DataSource for the tests above.
+type fixtureContent struct{}
+
+func (fixtureContent) Library() []library.Section { return nil }
+func (fixtureContent) Playlist() library.Playlist {
+	return library.Playlist{Tracks: []library.Track{{ID: "fixture"}}}
+}
+func (fixtureContent) Queue() []library.Track      { return []library.Track{{ID: "fixture"}} }
+func (fixtureContent) Session() library.Session    { return library.Session{} }
+func (fixtureContent) Sinks() []library.Sink       { return nil }
+func (fixtureContent) SetSaved(string, bool) error { return nil }
+func (fixtureContent) SetSink(string) error        { return nil }

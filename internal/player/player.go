@@ -3,9 +3,10 @@
 // sessionconfig.NewSessionFromConfigDir and drives the go-librespot player,
 // whose audio leaves this machine through a local PulseAudio sink (spec S16).
 //
-// Library content (browse, search, playlists) is still served by a delegate
-// DataSource until slice 3 (T7) wires the real catalog; every other
-// DataSource aspect — session state, sinks, output switching — is real.
+// Library content is real since T7: the UI fetches browse/search/library
+// through Catalog(), routed via webApiCall into the session's own Web API
+// accessor. The content DataSource delegate remains only as the mock-mode
+// backing store; session state, sinks, output switching and playback are real.
 //
 // Threading: the session bootstrap and the go-librespot player are owned by
 // one goroutine (run). Public methods hand work over via channels or take a
@@ -88,8 +89,8 @@ type Player struct {
 	closing   bool
 }
 
-// New builds the real player. content is the delegate DataSource serving
-// library lists (mock until slice 3).
+// New builds the real player. content backs the mock-mode library lists; the
+// real catalog flows through Catalog().
 func New(opts Options, content library.DataSource) *Player {
 	if opts.CallbackPort <= 0 {
 		opts.CallbackPort = config.DefaultCallbackPort
