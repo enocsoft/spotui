@@ -101,6 +101,25 @@ like. Pick the output with `d`; the current track resumes on the new sink.
 One fact appears once per screen: the audio output and bitrate live in the player bar, the collection
 count and sort in the context strip, and the queue drawer never repeats the current track.
 
+## Troubleshooting
+
+Every item below cost a real debugging session, in this order.
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Spotify says `response_type must be code` | A binary built before the PKCE login. The login screen prints `build <revision>` at the bottom: if it is missing or old, rebuild and run again. |
+| The browser says "login complete" and the terminal never moves | The session failed and the error was hidden behind the login screen. Update: failures outrank the login state since `dc5f9f8`. |
+| `failed exchanging oauth2 code: "code must be supplied"` | Something touched `127.0.0.1:<port>/login` before the real redirect (a restored tab, a reload, a favicon request). The callback is single-use: close old tabs, open the authorization URL in a fresh one and do not reload the callback page. |
+| `unknown credentials: *session.SpotifyTokenCredentials` | A credentials value passed by pointer. Fixed; the library type-switches on the concrete type. |
+| `accesspoint login failed: BadCredentials` | A Web API token where the access point wants a session token. Playback must log in with librespot's own client id. |
+| Nothing plays after `:play spotify:track:<id>` | Check the audio output with `d`, and confirm the id is 22 base62 characters. Full `open.spotify.com` links are not accepted yet. |
+| The list shows "Bebop Essentials" and tracks you never saved | That is fixture data. The real library and search are the pending Web API slice. |
+| `CGO_ENABLED=0 go build` fails | Expected: the FLAC decoder has no pure-Go fallback. Build with CGO on. |
+| The build revision has `+dirty` | The binary was built from a worktree with uncommitted changes. Fine for development, useless as a bug report. |
+
+The player log lives in `$XDG_STATE_HOME/spotify-tui/player.log` and redacts token-shaped runs, so it is
+safe to paste. It is the first place to look when audio does not start.
+
 ## Development
 
 ```sh
