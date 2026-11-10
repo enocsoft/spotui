@@ -869,3 +869,31 @@ func TestFetchUserIDSurfacesFailure(t *testing.T) {
 		t.Errorf("error = %q, want the step and status named", err)
 	}
 }
+
+// TestWebAPIScopesAreReal: every scope the library login asks for must exist in
+// Spotify's catalogue. An invented scope makes the authorize request fail with
+// invalid_scope before the consent screen, and it is invisible until a human tries.
+func TestWebAPIScopesAreReal(t *testing.T) {
+	known := map[string]bool{
+		"user-read-private": true, "user-read-email": true, "user-read-playback-state": true,
+		"user-modify-playback-state": true, "user-read-currently-playing": true,
+		"user-read-recently-played": true, "user-top-read": true, "user-follow-read": true,
+		"user-follow-modify": true, "user-library-read": true, "user-library-modify": true,
+		"playlist-read-private": true, "playlist-read-collaborative": true,
+		"playlist-modify-public": true, "playlist-modify-private": true,
+		"streaming": true, "app-remote-control": true, "ugc-image-upload": true,
+	}
+	for _, scope := range strings.Fields(WebAPIScopes) {
+		if !known[scope] {
+			t.Errorf("scope %q is not a real Spotify scope", scope)
+		}
+	}
+	for _, need := range []string{"playlist-read-private", "user-library-read", "user-library-modify"} {
+		if !strings.Contains(WebAPIScopes, need) {
+			t.Errorf("the library login needs %q", need)
+		}
+	}
+	if strings.Contains(WebAPIScopes, "playlist-read-modify") {
+		t.Errorf("playlist-read-modify does not exist")
+	}
+}

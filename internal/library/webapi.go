@@ -1,7 +1,6 @@
-// The real Web API catalog (T7). Every call goes through one accessor — the
-// embedded session's own WebApiWith429RetryAndReadBody (spec S20: one token,
-// no second auth flow) — so the only seam is WebAPIClient, which
-// *session.Session satisfies and tests replace with httptest fixtures.
+// The real Web API catalog (T7). Every call goes through one transport —
+// library.WebAPIClient, which the plain net/http HTTP client implements for
+// the app and tests replace with httptest fixtures.
 //
 // 2026 API constraints baked in here (spec S14, L7):
 //   - playlists: GET /v1/me/playlists, 50 per page, `next` followed lazily;
@@ -11,8 +10,8 @@
 //   - search: GET /v1/search with limit capped at 10, offset pagination;
 //   - saved toggle: generic PUT /v1/library and DELETE /me/library — the
 //     per-type endpoints (me/tracks, …) are gone;
-//   - 429 stays the session accessor's job (it retries internally); a 429
-//     that still surfaces becomes the rate-limit state, not a retry loop here.
+//   - 429 is never retried invisibly: one surfaced 429 becomes the
+//     rate-limit state, not a retry loop here.
 package library
 
 import (
@@ -36,17 +35,20 @@ const searchLimit = 10
 // state, not a frozen window.
 const catalogTimeout = 120 * time.Second
 
-// WebAPIClient is the session's own Web API accessor. The embedded session
-// implements it with WebApiWith429RetryAndReadBody; tests replace it with an
-// httptest-backed fixture so the suite stays credential-free and offline.
+// WebAPIClient is the transport the catalog's requests ride on: one request
+// in, one status-and-body out. The app wires it to the plain net/http HTTP
+// client over the library's own token (webapi_http.go); tests replace it
+// with an httptest-backed fixture so the suite stays credential-free and
+// offline.
 type WebAPIClient interface {
-	WebApiWith429RetryAndReadBody(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error)
+	Call(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error)
 }
 
 // WebAPIClientFunc adapts a function to WebAPIClient.
 type WebAPIClientFunc func(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error)
 
-func (f WebAPIClientFunc) WebApiWith429RetryAndReadBody(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error) {
+// Call implements WebAPIClient.
+func (f WebAPIClientFunc) Call(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error) {
 	return f(ctx, method, path, query, body)
 }
 
@@ -91,7 +93,7 @@ func webAPIError(status int, body []byte, err error) error {
 func (w *WebAPI) call(ctx context.Context, method, path string, query url.Values) ([]byte, error) {
 	cctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
-	body, status, err := w.client.WebApiWith429RetryAndReadBody(cctx, method, path, query, nil)
+	body, status, err := w.client.Call(cctx, method, path, query, nil)
 	if err != nil {
 		return nil, webAPIError(status, body, err)
 	}

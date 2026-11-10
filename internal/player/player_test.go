@@ -3,6 +3,8 @@ package player
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -200,8 +202,9 @@ func TestLoginURLIsHandedOverWhole(t *testing.T) {
 	}
 }
 
-// TestCatalogNeedsTheSession: the catalog fetches through the embedded
-// session's own Web API accessor — no session, no calls, one clear error.
+// TestCatalogNeedsTheSession: the catalog needs the library's own token (the
+// second login); with nothing cached every call fails with one clear error
+// the UI renders, never a crash and never a playback-token call.
 func TestCatalogNeedsTheSession(t *testing.T) {
 	p := New(Options{}, nil)
 	fetch := p.Catalog()
@@ -243,3 +246,72 @@ func (fixtureContent) Session() library.Session    { return library.Session{} }
 func (fixtureContent) Sinks() []library.Sink       { return nil }
 func (fixtureContent) SetSaved(string, bool) error { return nil }
 func (fixtureContent) SetSink(string) error        { return nil }
+
+// TestNewBuildsTheWebAPIAuthConfig: the library login is a second, separate
+// PKCE flow: the dashboard client id from config, the Web API scope set, the
+// same loopback callback port and its own cache file — the two tokens are
+// never each other's.
+func TestNewBuildsTheWebAPIAuthConfig(t *testing.T) {
+	p := New(Options{ConfigDir: "/state/dir", CallbackPort: 9001, ClientID: "dashboard-cid"}, nil)
+	if p.webCfg.ClientID != "dashboard-cid" {
+		t.Errorf("web auth client id = %q, want the dashboard id from config", p.webCfg.ClientID)
+	}
+	if p.webCfg.Scopes != auth.WebAPIScopes {
+		t.Errorf("web auth scopes = %q, want the Web API set %q", p.webCfg.Scopes, auth.WebAPIScopes)
+	}
+	if p.webCfg.CacheFile != "webtoken.json" {
+		t.Errorf("web cache file = %q, want webtoken.json — token.json is the playback token's", p.webCfg.CacheFile)
+	}
+	if p.webCfg.CallbackPort != 9001 || p.webCfg.StateDir != "/state/dir" {
+		t.Errorf("web auth config = %+v, want the same port and state dir", p.webCfg)
+	}
+	if got := p.webCfg.RedirectURI(); got != "http://127.0.0.1:9001/login" {
+		t.Errorf("web redirect URI = %q, want the same loopback redirect", got)
+	}
+}
+
+// stubWebTokens is a library.TokenSource fixture: it hands out one fixed
+// token, the one the Web API must carry.
+type stubWebTokens struct{ token string }
+
+func (s stubWebTokens) AccessToken(context.Context) (string, error) { return s.token, nil }
+func (s stubWebTokens) Refresh(context.Context) error               { return nil }
+
+// TestCatalogSendsTheWebAPITokenNeverTheSessionToken: the catalog talks to
+// api.spotify.com over plain HTTP with the library's own token; the playback
+// session token must never ride along.
+func TestCatalogSendsTheWebAPITokenNeverTheSessionToken(t *testing.T) {
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"total":0,"offset":0,"next":null,"items":[]}`))
+	}))
+	defer srv.Close()
+
+	p := New(Options{ConfigDir: t.TempDir(), ClientID: "dashboard-cid"}, nil)
+	p.webTokens = stubWebTokens{token: "web-api-token"}
+	p.webBase = srv.URL
+	if _, err := p.Catalog().Playlists(context.Background(), 0); err != nil {
+		t.Fatalf("Playlists: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("made %d requests, want 1", len(auths))
+	}
+	if auths[0] != "Bearer web-api-token" {
+		t.Errorf("catalog Authorization = %q, want exactly the Web API token", auths[0])
+	}
+	if strings.Contains(auths[0], "session-token") {
+		t.Errorf("the playback session token leaked into a catalog request: %q", auths[0])
+	}
+}
+
+// TestCatalogNeedsTheWebAPITokenBeforeLogin: with no library token cached the
+// catalog fails with the not-logged-in error the UI renders.
+func TestCatalogNeedsTheWebAPITokenBeforeLogin(t *testing.T) {
+	p := New(Options{ConfigDir: t.TempDir(), ClientID: "dashboard-cid"}, nil)
+	_, err := p.Catalog().Playlists(context.Background(), 0)
+	if err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Errorf("Playlists before the library login = %v, want the not-logged-in error", err)
+	}
+}

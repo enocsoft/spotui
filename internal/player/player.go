@@ -4,9 +4,11 @@
 // whose audio leaves this machine through a local PulseAudio sink (spec S16).
 //
 // Library content is real since T7: the UI fetches browse/search/library
-// through Catalog(), routed via webApiCall into the session's own Web API
-// accessor. The content DataSource delegate remains only as the mock-mode
-// backing store; session state, sinks, output switching and playback are real.
+// through Catalog(), driven over plain net/http against api.spotify.com with
+// the library's own Web API token — a second login, separate from the
+// playback one (two tokens, one purpose each). The content DataSource
+// delegate remains only as the mock-mode backing store; session state,
+// sinks, output switching and playback are real.
 //
 // Threading: the session bootstrap and the go-librespot player are owned by
 // one goroutine (run). Public methods hand work over via channels or take a
@@ -46,10 +48,11 @@ type Options struct {
 	ConfigDir string
 	// CallbackPort is the interactive-login callback port (spec S12).
 	CallbackPort int
-	// ClientID is the dashboard client id from the XDG config. It is kept
-	// for the Web API (T7) and is never used for the playback login: that
-	// flow authenticates as librespot's own client, the only one whose
-	// tokens carry the `username` claim the access point requires.
+	// ClientID is the dashboard client id from the XDG config. It drives the
+	// library's own Web API login (two tokens, one purpose each): Web API
+	// quota belongs to the dashboard app. It is never used for the playback
+	// login: that flow authenticates as librespot's own client, the only one
+	// whose tokens carry the `username` claim the access point requires.
 	ClientID string
 	// Output is the preferred sink id; empty means the PulseAudio default.
 	Output string
@@ -63,6 +66,15 @@ type Player struct {
 	authCfg auth.Config
 	baseCtx context.Context
 	http    *http.Client
+
+	// webCfg is the library's own login: the dashboard client id, the Web API
+	// scope set and the webtoken.json cache — a second token that never
+	// touches the session or the playback cache.
+	webCfg auth.Config
+	// webTokens supplies (and refreshes) that second token to the catalog.
+	webTokens library.TokenSource
+	// webBase overrides the Web API root for tests; empty = production.
+	webBase string
 
 	libEvents chan library.Event
 	volCh     chan float32 // external-volume updates from the output backend
@@ -109,7 +121,22 @@ func New(opts Options, content library.DataSource) *Player {
 			// lives next to the device id, never in the repository.
 			StateDir: opts.ConfigDir,
 		},
-		http:      &http.Client{Timeout: 30 * time.Second},
+		webCfg: auth.Config{
+			// The library's second login: the dashboard client id from
+			// config, the Web API scope set, its own cache file. Same
+			// loopback redirect, same state dir, never the same token.
+			ClientID:     opts.ClientID,
+			CallbackPort: opts.CallbackPort,
+			StateDir:     opts.ConfigDir,
+			CacheFile:    auth.WebTokenCacheFile,
+			Scopes:       auth.WebAPIScopes,
+		},
+		http: &http.Client{Timeout: 30 * time.Second},
+		webTokens: auth.NewWebAPITokenSource(auth.Config{
+			ClientID:  opts.ClientID,
+			StateDir:  opts.ConfigDir,
+			CacheFile: auth.WebTokenCacheFile,
+		}),
 		libEvents: make(chan library.Event, 16),
 		volCh:     make(chan float32, 1),
 		sinkReq:   make(chan string, 1),
@@ -165,7 +192,9 @@ func (p *Player) emit(ev library.Event) {
 // run owns the login (spec S20), the session bootstrap and then pumps
 // player events until the context dies.
 func (p *Player) run() {
-	log := newCaptureLogger(p.authCfg.StateDir, p.onAuthorizeURL)
+	log := newCaptureLogger(p.authCfg.StateDir, func(u string) {
+		p.onAuthorizeURL(library.LoginPurposePlayback, u)
+	})
 
 	// The playback login is ours (spec S20): go-librespot's interactive
 	// callback accepts ANY request on the port as the code carrier — a
@@ -187,9 +216,25 @@ func (p *Player) run() {
 
 	authCfg := p.authCfg
 	authCfg.Log = log.Infof
-	tok, err := authCfg.EnsureToken(bootCtx, p.onAuthorizeURL)
+	tok, err := authCfg.EnsureToken(bootCtx, func(u string) {
+		p.onAuthorizeURL(library.LoginPurposePlayback, u)
+	})
 	if err != nil {
 		p.fail(err)
+		return
+	}
+
+	// The library's second login: a separate PKCE flow with the dashboard
+	// client id whose tokens are the only ones the Web API serves (the
+	// playback token belongs to librespot's client id and is rate-limited
+	// out of every catalog endpoint). Sequential, on the same callback
+	// port, never at the same time; a cached token skips its consent.
+	webCfg := p.webCfg
+	webCfg.Log = log.Infof
+	if _, err := webCfg.EnsureToken(bootCtx, func(u string) {
+		p.onAuthorizeURL(library.LoginPurposeLibrary, u)
+	}); err != nil {
+		p.fail(fmt.Errorf("library login: %v", err))
 		return
 	}
 
@@ -242,9 +287,11 @@ func (p *Player) run() {
 	}
 }
 
-// onAuthorizeURL surfaces the login URL the auth flow generated: the TUI
-// shows it as a full-screen state (spec S9).
-func (p *Player) onAuthorizeURL(url string) {
+// onAuthorizeURL surfaces the login URL the auth flow generated: the TUI shows
+// it as a full-screen state (spec S9), naming which half of the app is
+// asking — playback or the library — because two consents on one port must
+// not be confusing.
+func (p *Player) onAuthorizeURL(purpose, url string) {
 	p.mu.Lock()
 	p.loginURL = url
 	p.mu.Unlock()
@@ -254,7 +301,7 @@ func (p *Player) onAuthorizeURL(url string) {
 			file = path
 		}
 	}
-	p.emit(library.Event{Type: library.EventLogin, LoginURL: url, LoginFile: file})
+	p.emit(library.Event{Type: library.EventLogin, LoginURL: url, LoginFile: file, LoginPurpose: purpose})
 }
 
 // fail records a bootstrap failure and surfaces it to the UI.

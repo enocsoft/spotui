@@ -108,6 +108,8 @@ const (
 	// EventState means the session snapshot changed; re-read Session().
 	EventState EventType = iota
 	// EventLogin carries the interactive auth URL in LoginURL (spec S9).
+	// With two tokens there are two logins on first run; LoginPurpose names
+	// which half of the app is asking. Empty means playback.
 	EventLogin
 	// EventConnecting means the token is in hand and the session bootstrap is
 	// running. Without it the UI sits on the login screen with no sign of life.
@@ -125,6 +127,10 @@ type Event struct {
 	Type EventType
 	// LoginURL is the authorization URL the user must open.
 	LoginURL string
+	// LoginPurpose names which login is asking: LoginPurposePlayback or
+	// LoginPurposeLibrary. The login state shows it so two consecutive
+	// consents (playback, then the library) are not confusing.
+	LoginPurpose string
 	// LoginFile is where the same URL was written verbatim, because a long
 	// authorization URL cannot be read or copied from a truncated screen line.
 	LoginFile string
@@ -136,6 +142,14 @@ type Event struct {
 type PlayerEvents interface {
 	Events() <-chan Event
 }
+
+// The two logins the TUI names in the login state (two tokens, one purpose
+// each): playback runs on librespot's client id, the library on the
+// dashboard's.
+const (
+	LoginPurposePlayback = "playback"
+	LoginPurposeLibrary  = "library"
+)
 
 // trackIDLen is the length of a base62 Spotify track id.
 const trackIDLen = 22

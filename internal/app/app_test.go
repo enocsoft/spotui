@@ -518,3 +518,39 @@ func TestFailureAfterLoginIsVisible(t *testing.T) {
 		t.Errorf("the login screen must not outrank the error")
 	}
 }
+
+// TestLoginViewShowsWhichLoginAsks: with two tokens there are two consents on
+// first run, served sequentially on the same port. The login state must say
+// which half of the app is asking so the two screens are not confusing.
+func TestLoginViewShowsWhichLoginAsks(t *testing.T) {
+	m := newModel(t, 80, 24)
+	updated, _ := m.Update(playerEventMsg{library.Event{
+		Type: library.EventLogin, LoginURL: "https://example.test/auth",
+		LoginPurpose: library.LoginPurposeLibrary}})
+	*m = updated.(Model)
+	got := m.View()
+	if !strings.Contains(got, "this login is for the library") {
+		t.Errorf("the library login must name itself, got:\n%s", got)
+	}
+	if strings.Contains(got, "this login is for playback") {
+		t.Errorf("the library login must not present itself as the playback login:\n%s", got)
+	}
+
+	m = newModel(t, 80, 24)
+	updated, _ = m.Update(playerEventMsg{library.Event{
+		Type: library.EventLogin, LoginURL: "https://example.test/auth",
+		LoginPurpose: library.LoginPurposePlayback}})
+	*m = updated.(Model)
+	if !strings.Contains(m.View(), "this login is for playback") {
+		t.Errorf("the playback login must name itself, got:\n%s", m.View())
+	}
+
+	// A login event without a purpose (older emitter) still reads as playback.
+	m = newModel(t, 80, 24)
+	updated, _ = m.Update(playerEventMsg{library.Event{
+		Type: library.EventLogin, LoginURL: "https://example.test/auth"}})
+	*m = updated.(Model)
+	if !strings.Contains(m.View(), "this login is for playback") {
+		t.Errorf("an unlabeled login must default to playback, got:\n%s", m.View())
+	}
+}

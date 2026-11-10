@@ -140,10 +140,6 @@ func asAPIError(err error, target **APIError) bool {
 	return false
 }
 
-// ErrNotLoggedIn is what every catalog call returns before the embedded
-// session exists: the UI shows it as an error state, never a crash.
-var ErrNotLoggedIn = fmt.Errorf("not logged in · the catalog needs the player session")
-
 // shorten cuts a status line to a sane one-row length for toasts.
 func shorten(s string, n int) string {
 	if len(s) <= n {

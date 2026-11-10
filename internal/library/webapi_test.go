@@ -453,8 +453,8 @@ func TestWebAPIErrorWithoutBodyStillHasStatus(t *testing.T) {
 // --- 429: the existing rate-limit state, not invented retries ---
 
 func TestWebAPI429SurfacesAsRateLimited(t *testing.T) {
-	// The session accessor already retries 429 internally; when the status
-	// still lands here the UI shows the rate-limit state (DESIGN global states).
+	// The transport never retries a 429 (no retry storm); when the status
+	// lands here the UI shows the rate-limit state (DESIGN global states).
 	client, _ := fixtureClient(t, func(t *testing.T, r *http.Request) (int, string) {
 		return 429, `{"error":{"status":429,"message":"rate limit exceeded"}}`
 	})
@@ -468,9 +468,9 @@ func TestWebAPI429SurfacesAsRateLimited(t *testing.T) {
 	}
 }
 
-func TestWebAPIRateLimitFromAccessorError(t *testing.T) {
-	// WebApiWith429RetryAndReadBody gives up with an error naming the rate
-	// limit after its internal retries; that must surface the same state.
+func TestWebAPIRateLimitFromTransportError(t *testing.T) {
+	// A transport error naming the rate limit (e.g. a dropped-but-429'd
+	// connection) must surface the same state.
 	client := WebAPIClientFunc(func(ctx context.Context, method, path string, query url.Values, body []byte) ([]byte, int, error) {
 		return nil, 0, errors.New("webapi rate limit (429) after 3 attempts")
 	})

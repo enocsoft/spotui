@@ -163,7 +163,8 @@ func (m Model) messageView(lines []string) string {
 }
 
 // loginView surfaces the interactive auth URL instead of hanging silently
-// (spec S9): the URL and where the callback lands, keys at the bottom.
+// (spec S9): the URL and where the callback lands, which login is asking, keys
+// at the bottom.
 func (m Model) loginView() string {
 	lines := []string{
 		"",
@@ -171,6 +172,7 @@ func (m Model) loginView() string {
 		"",
 		theme.ValueStyle.Render("open this URL in a browser and approve the Spotify access:"),
 		"",
+		theme.MetaStyle.Render(m.loginNames()),
 	}
 	for _, chunk := range wrapURL(m.loginURL, m.w-4) {
 		lines = append(lines, theme.AccentStyle.Render(chunk))
@@ -187,6 +189,16 @@ func (m Model) loginView() string {
 		theme.LabelStyle.Render("ctrl+c quit"),
 	)
 	return m.messageView(lines)
+}
+
+// loginNames says which of the two logins is asking (two tokens, one purpose
+// each): the playback one runs on librespot's client id, the library one on
+// the dashboard's. An unlabeled event still reads as playback.
+func (m Model) loginNames() string {
+	if m.loginPurpose == library.LoginPurposeLibrary {
+		return "this login is for the library · playlists, search and saved tracks"
+	}
+	return "this login is for playback · the embedded player session"
 }
 
 // wrapURL breaks a long URL into chunks that fit width, cutting at "&" so every

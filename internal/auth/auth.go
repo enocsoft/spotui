@@ -36,6 +36,17 @@ import (
 // the token can do; anything wider would break the equivalence.
 const Scopes = "app-remote-control playlist-modify playlist-modify-private playlist-modify-public playlist-read playlist-read-collaborative playlist-read-private streaming ugc-image-upload user-follow-modify user-follow-read user-library-modify user-library-read user-modify user-modify-playback-state user-modify-private user-personalized user-read-birthdate user-read-currently-playing user-read-email user-read-play-history user-read-playback-position user-read-playback-state user-read-private user-read-recently-played user-top-read"
 
+// WebAPIScopes is the scope set the second login asks for: the library's
+// own PKCE flow with the dashboard client id, whose tokens are the only ones
+// the Web API serves without rate-limiting (playback tokens belong to
+// librespot's client id and are rejected by the catalog quota). Deliberately
+// narrower than Scopes: the library token never plays audio.
+const WebAPIScopes = "user-read-private playlist-read-private playlist-read-collaborative user-library-read user-library-modify"
+
+// WebTokenCacheFile is the library token's cache file name: a second file
+// next to the playback one, so the two tokens never overwrite each other.
+const WebTokenCacheFile = "webtoken.json"
+
 // Production endpoints. Config.Endpoints overrides them in tests.
 const (
 	authorizeEndpoint = "https://accounts.spotify.com/authorize"
@@ -55,7 +66,9 @@ const (
 	// pkceAlphabet is RFC 7636's unreserved set.
 	pkceAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 
-	// cacheFile lives in the XDG state dir, written 0600 (spec S9).
+	// cacheFile is the playback token's cache, in the XDG state dir, written
+	// 0600 (spec S9). The library's Web API token caches into
+	// WebTokenCacheFile next to it: two tokens, two files, never clobbered.
 	cacheFile = "token.json"
 
 	// tokenExpirySkew: treat a token as expired this long before its real
@@ -73,13 +86,22 @@ type Endpoints struct {
 
 // Config configures the PKCE flow and the token cache.
 type Config struct {
-	// ClientID is the Spotify app client id from the dashboard config.
+	// ClientID is the Spotify app client id from the dashboard config. The
+	// playback login always overrides it with librespot's own; the library's
+	// Web API login uses it as configured.
 	ClientID string
 	// CallbackPort is the TCP port of the loopback redirect URI.
 	CallbackPort int
 	// StateDir is the XDG state dir; the cache lands in
-	// <StateDir>/token.json with 0600 permissions.
+	// <StateDir>/token.json (or <StateDir>/<CacheFile>) with 0600 permissions.
 	StateDir string
+	// CacheFile overrides the cache file name (empty: token.json). The
+	// library's Web API token uses webtoken.json so the two logins never
+	// overwrite each other.
+	CacheFile string
+	// Scopes overrides the authorization scope set (empty: the playback
+	// login's exact set). The library's Web API login sets WebAPIScopes.
+	Scopes string
 	// Endpoints overrides the Spotify URLs (tests); zero = production.
 	Endpoints Endpoints
 	// HTTP is the client used for every call; nil = a client with a timeout.
@@ -169,6 +191,15 @@ func randomUnreserved(n int) (string, error) {
 	return string(out), nil
 }
 
+// scopes is the scope set this login authorizes for: Config.Scopes when set
+// (the library's Web API login), the playback login's exact set otherwise.
+func (c Config) scopes() string {
+	if c.Scopes != "" {
+		return c.Scopes
+	}
+	return Scopes
+}
+
 // AuthorizeURL builds the authorization URL: response_type=code (the
 // implicit grant is dead), S256 challenge, our redirect and scopes.
 func (c Config) AuthorizeURL(p PKCE) string {
@@ -176,7 +207,7 @@ func (c Config) AuthorizeURL(p PKCE) string {
 		"response_type":         {"code"},
 		"client_id":             {c.ClientID},
 		"redirect_uri":          {c.RedirectURI()},
-		"scope":                 {Scopes},
+		"scope":                 {c.scopes()},
 		"state":                 {p.State},
 		"code_challenge":        {p.Challenge},
 		"code_challenge_method": {"S256"},
@@ -423,7 +454,14 @@ func (c Config) Refresh(ctx context.Context, tok Token) (Token, error) {
 	return nt, nil
 }
 
-func (c Config) cachePath() string { return filepath.Join(c.StateDir, cacheFile) }
+func (c Config) cacheFile() string {
+	if c.CacheFile != "" {
+		return c.CacheFile
+	}
+	return cacheFile
+}
+
+func (c Config) cachePath() string { return filepath.Join(c.StateDir, c.cacheFile()) }
 
 // LoadToken reads the cached token. A missing cache is not an error; a
 // corrupt one is, and says what to do about it.

@@ -71,6 +71,9 @@ type Model struct {
 	eventCh   <-chan library.Event // real-player events; nil for the mock
 	loginURL  string               // non-empty: full-screen login state (S9)
 	loginFile string
+	// loginPurpose is which login is asking (library.LoginPurpose*): two
+	// tokens mean two consents on first run, and the state names its own.
+	loginPurpose string
 	// connecting is true between the token and the session handshake: the login
 	// screen must hand over to something that shows life, or a slow bootstrap looks
 	// like a dead app.
@@ -225,6 +228,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case library.EventLogin:
 			m.loginURL, m.loginFile, m.connecting = msg.LoginURL, msg.LoginFile, false
+			m.loginPurpose = msg.LoginPurpose
 		case library.EventConnecting:
 			m.connecting = true
 		case library.EventReady:
